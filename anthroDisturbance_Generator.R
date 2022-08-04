@@ -6,16 +6,29 @@
 ## If exact location is required, functions will be: `sim$.mods$<moduleName>$FunctionName`.
 defineModule(sim, list(
   name = "anthroDisturbance_Generator",
-  description = "",
+  description = paste0("This is a module to generate anthropogenic disturbances.",
+                       "It's primarily intended for the Northwest Territories region",
+                       " (default), but the structure is universal.",
+                       " All needed to do is provide the metadata information ",
+                       "required by the `disturbanceParameters` ",
+                       "object and the disturbanceList containing current disturbances ",
+                       "and potential disturbances (i.e., for disturbances of Generating type)."),
   keywords = "",
-  authors = structure(list(list(given = c("First", "Middle"), family = "Last", role = c("aut", "cre"), email = "email@example.com", comment = NULL)), class = "person"),
+  authors = structure(list(list(given = "Tati", 
+                                family = "Micheletti", role = c("aut", "cre"), 
+                                email = "tati.micheletti@gmail.com", 
+                                comment = NULL)), 
+                      class = "person"),
   childModules = character(0),
   version = list(anthroDisturbance_Generator = "0.0.0.9000"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
-  reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2"),
+  reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
+                  "PredictiveEcology/reproducible@development",
+                  "raster", "terra", "crayon", "msm", "rgdal", "sf", 
+                  "fasterize", "stars", "nngeo"),
   parameters = rbind(
     #defineParameter("paramName", "paramClass", value, min, max, "parameter description"),
     defineParameter(".plots", "character", "screen", NA, NA,
@@ -28,19 +41,130 @@ defineModule(sim, list(
                     "Describes the simulation time at which the first save event should occur."),
     defineParameter(".saveInterval", "numeric", NA, NA, NA,
                     "This describes the simulation time interval between save events."),
-    ## .seed is optional: `list('init' = 123)` will `set.seed(123)` for the `init` event only.
     defineParameter(".seed", "list", list(), NA, NA,
                     "Named list of seeds to use for each event (names)."),
     defineParameter(".useCache", "logical", FALSE, NA, NA,
-                    "Should caching of events or module be used?")
+                    "Should caching of events or module be used?"),
+    defineParameter("saveInitialDisturbances", "logical", TRUE, NA, NA,
+                    paste0("Should the disturbance rasters be saved at each step? These are saved ",
+                           "to Paths[['outputPath']] as a RasterLayer, with disturbanceLayer as prefix",
+                           "the name of the industry and the year as suffix.",
+                           "If TRUE, it saves the initial conditions (IC)")),
+    defineParameter("saveCurrentDisturbances", "logical", TRUE, NA, NA,
+                    paste0("Should the disturbance rasters be saved at each step? These are saved ",
+                           "to Paths[['outputPath']] as a RasterLayer, with disturbanceLayer as prefix",
+                           "the name of the industry and the year as suffix.",
+                           "If TRUE, it saves at the end of each step."))
+    
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
-    expectsInput(objectName = NA, objectClass = NA, desc = NA, sourceURL = NA)
-  ),
+    expectsInput(objectName = "disturbanceList", objectClass = "list",
+                 desc = paste0("List (general category) of lists (specific ",
+                               "class) needed for generating ",
+                               "disturbances. This is generally the output from a potential",
+                               "Resources module (i.e., potentialResourcesNT_DataPrep), ",
+                               "where multiple potential layers (i.e., mining",
+                               " and oilGas) we replaced by only one layer with the highest",
+                               "values being the ones that need to be filled ",
+                               "with new developments first, or prepared potential layers",
+                               " (i.e., potentialCutblocks)."),
+                 sourceURL = "https://drive.google.com/file/d/1v7MpENdhspkWxHPZMlmx9UPCGFYGbbYm/view?usp=sharing"),
+    
+    expectsInput(objectName = "disturbanceParameters", objectClass = "data.table",
+                 desc = paste0("Table with the following columns: ",
+                               
+                               "dataName --> this column groups the type of data ",
+                               "by sector (i.e., Energy, Settlements, OilGas, ",
+                               "Mining, Forestry, Roads)",
+                               
+                               "dataClass --> this column details the type of data ",
+                               "ALWAYS with 'potential' starting (i.e., potentialSettlements ",
+                               "potentialWindTurbines, potentialCutblocks, etc.)",
+                               "can harmonize different ones. Potential data classes ",
+                               "can be of three general disturbanceType (see below)",
+                               
+                               "disturbanceType --> Potential data classes ",
+                               "can be of three general types:",
+                               "1. Enlarging (i.e., potentialSettlements",
+                               " and potentialSeismicLines): where the potential one is ",
+                               "exactly the same as the current layer, and we",
+                               " only buffer it with time",
+                               "2. Generating (i.e., potentialWindTurbines, potentialOilGas",
+                               "potentialMineral, potentialForestry): where the ",
+                               "potential layers are only the potential where ",
+                               "structures can appear based on a specific rate",
+                               "3. Connecting (i.e., potentialPipelines, ",
+                               "potentialTransmission, potentialRoads incl. ",
+                               "forestry ones): where the potential layer needs ",
+                               "to have the current/latest transmission, pipeline,",
+                               " and road network. This process will depend on ",
+                               "what is generated in point 2.",
+                               
+                               "disturbanceRate --> what is the rate of generation for ",
+                               "disturbances per year of type Enlarging and Generating. For ",
+                               "disturbances type Connecting, disturbanceRate is NA. ",
+                               "If not specified when needed, the module will try to derive ",
+                               "it from data. If this fails, it will fall on a yearly average ",
+                               " of 0.2% of the current disturbance (except for windTurbine, ",
+                               "which has a default value of 1 per 10 years considering the reduced ",
+                               "of potential in the region.",
+                               
+                               "disturbanceSize --> if there is a specific size the disturbance in m2 ",
+                               "type Generating should have, it is specified here. If not specified, ",
+                               " the module will try to derive it from data. For disturbances ",
+                               "type Enlarging anb Connecting, disturbanceSize is NA",
+                               
+                               "disturbanceOrigin --> dataClass that should be used as the 'original' ",
+                               "to be either modified (i.e., Enlarging, Generating) or as origin  ",
+                               "point for Connecting types.",
+                               
+                               "disturbanceEnd --> end points for Connecting layers (i.e., ",
+                               "newly created windTurbines: connect into powerLines, ",
+                               "newly created windTurbines: connect into roads, ",
+                               "newly created oilGas: connect into pipeline, ",
+                               "newly created oilGas: connect into roads, ",
+                               "newly created settlements: connect into roads, ",
+                               "newly created mines: connect into roads",
+                               "newly created cutblocks: connect into roads)",
+                               
+                               "disturbanceInterval --> interval for which ",
+                               "this disturbance should happen ",
+                               
+                               "It defaults to an example in the Northwest ",
+                               "Territories and needs to be provided if the ",
+                               "study area is not in this region (i.e., union ",
+                               "of BCR6 and NT1)"), 
+                 sourceURL = "https://drive.google.com/file/d/1xJypz-VOA_bHN0y4GYikY25UKID_oTh_/view?usp=sharing"),
+    expectsInput(objectName = "studyArea", 
+                 objectClass = "SpatialPolygonDataFrame|vect", 
+                 desc = paste0("Study area to which the module should be ",
+                               "constrained to. Defaults to NT1+BCR6. Object ",
+                               "can be of class 'vect' from terra package"), 
+                 sourceURL = "https://drive.google.com/file/d/1RPfDeHujm-rUHGjmVs6oYjLKOKDF0x09/view?usp=sharing"),
+    expectsInput(objectName = "rasterToMatch", 
+                 objectClass = "RasterLayer|rast", 
+                 desc = paste0("All spatial outputs will be reprojected and ",
+                               "resampled to it. Defaults to NT1+BCR6. Object ",
+                               "can be of class 'rast' from terra package"), 
+                 sourceURL = "https://drive.google.com/file/d/11yCDc2_Wia2iw_kz0f0jOXrLpL8of2oM/view?usp=sharing"),
+    expectsInput(objectName = "rstCurrentBurn", 
+                 objectClass = "RasterLayer", 
+                 desc = paste0("A binary raster with 1 values representing burned pixels. ",
+                               "This raster is normally produced by either the module historicFires or ",
+                               "a fire simulation module (i.e., fireSense, SCFM, LandMine)"),
+                 sourceURL = NA)
+    ),
   outputObjects = bindrows(
-    #createsOutput("objectName", "objectClass", "output object description", ...),
-    createsOutput(objectName = NA, objectClass = NA, desc = NA)
+    createsOutput(objectName = "disturbanceList", objectClass = NA, 
+                  desc = paste0("Updated list (general category) of lists (specific ",
+                                "class) of disturbances and the potential needed for ",
+                                "generating disturbances. ")),
+    createsOutput(objectName = "currentDisturbanceLayer", objectClass = "list", 
+                  desc = paste0("List of rasters with all current disturbances.",
+                                "Can be used  for other purposes but was created to filter potential",
+                                " pixels that already have disturbances to avoid choosing new ",
+                                "pixels in existing disturbed ones"))
   )
 ))
 
@@ -51,128 +175,106 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
-      ### check for more detailed object dependencies:
-      ### (use `checkObject` or similar)
+      if (P(sim)$saveInitialDisturbances){
+        message(crayon::yellow(paste0("The parameter saveInitialDisturbances is TRUE.",
+                                      " Saving initial disturbance layers")))
+        saveDisturbances(disturbanceList = sim$disturbanceList,
+                         currentTime = "IC", overwrite = TRUE)
+      }
 
-      # do stuff for this event
-      sim <- Init(sim)
-
+      mod$.whichToRun <- whichDisturbancesToGenerate(startTime = start(sim),
+                                                     currentTime = time(sim),
+                                                     endTime = end(sim),
+                                                     disturbanceParameters = sim$disturbanceParameters)
+      sim$currentDisturbanceLayer <- list()
       # schedule future event(s)
-      sim <- scheduleEvent(sim, P(sim)$.plotInitialTime, "anthroDisturbance_Generator", "plot")
-      sim <- scheduleEvent(sim, P(sim)$.saveInitialTime, "anthroDisturbance_Generator", "save")
+        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingSize")
+        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingRate")
+        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "generatingDisturbances")
+        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "updatingDisturbanceList")
     },
-    plot = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      plotFun(sim) # example of a plotting function
-      # schedule future event(s)
-
-      # e.g.,
-      #sim <- scheduleEvent(sim, time(sim) + P(sim)$.plotInterval, "anthroDisturbance_Generator", "plot")
-
-      # ! ----- STOP EDITING ----- ! #
+    calculatingSize = {
+      # Check for needed sizes. If all provided, skip event
+      mod$.whichNeedSize <- which(sim$disturbanceParameters[, disturbanceType == "Generating" &
+                                                              is.na(disturbanceSize)])
+      if (all(length(mod$.whichToRun) != 0,
+              length(mod$.whichNeedSize) != 0))
+        sim$disturbanceParameters <- calculateSize(disturbanceParameters = sim$disturbanceParameters,
+                                                 whichToUpdate = mod$.whichNeedSize,
+                                                 disturbanceList = sim$disturbanceList)
     },
-    save = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
-
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + P(sim)$.saveInterval, "anthroDisturbance_Generator", "save")
-
-      # ! ----- STOP EDITING ----- ! #
+    calculatingRate = {
+      # Check for needed rates. If all provided, skip event
+      mod$.whichNeedRates <- which(sim$disturbanceParameters[, disturbanceType %in% c("Generating", "Enlarging") &
+                                                               is.na(disturbanceRate)])
+      if (all(length(mod$.whichToRun) != 0,
+              length(mod$.whichNeedRates) != 0))
+        sim$disturbanceParameters <- calculateRate(disturbanceParameters = sim$disturbanceParameters,
+                                                 whichToUpdate = mod$.whichNeedRates,
+                                                 disturbanceList = sim$disturbanceList,
+                                                 RTM = sim$rasterToMatch)
+      },
+    generatingDisturbances = {
+      # Check if the time(sim) is within the interval to run the disturbances
+      mod$.whichToRun <- whichDisturbancesToGenerate(startTime = start(sim),
+                                                     currentTime = time(sim),
+                                                     endTime = end(sim),
+                                                     disturbanceParameters = sim$disturbanceParameters)
+      if (length(mod$.whichToRun) != 0){ # If anything is scheduled
+        forestryScheduled <- "forestry" %in% sim$disturbanceParameters[mod$.whichToRun, dataName]
+        if (forestryScheduled) { # forestry scheduled?
+          if (is.null(sim$rstCurrentBurn)){
+            # Try to get rstCurrentBurn if no module is producing it!
+            mod$rstCurrentBurn <- createModObject(data = "rstCurrentBurn", 
+                                                  sim = sim, 
+                                                  pathInput = inputPath(sim), 
+                                                  currentTime = time(sim),
+                                                  returnNULL = TRUE)
+          } else {
+            mod$rstCurrentBurn <- sim$rstCurrentBurn
+          }
+        }
+        
+        currDis <- tryCatch({
+          tail(sim$currentDisturbanceLayer,
+               n = 1)[[1]]
+        }, error = function(e){
+          return(NULL) 
+        })
+        
+        mod$updatedLayers <- generateDisturbances(disturbanceParameters = sim$disturbanceParameters[dataName != "forestry"|disturbanceOrigin != "cutblocks", ],
+                                                  disturbanceList = sim$disturbanceList,
+                                                  currentTime = time(sim),
+                                                  rasterToMatch = sim$rasterToMatch,
+                                                  currentDisturbanceLayer = currDis)
+        
+        mod$updatedLayers <- generateDisturbances_forestry(disturbanceParameters = sim$disturbanceParameters[dataName == "forestry"|disturbanceOrigin != "cutblocks", ],
+                                                  disturbanceList = sim$disturbanceList,
+                                                  fires = mod$rstCurrentBurn,
+                                                  currentTime = time(sim),
+                                                  rasterToMatch = sim$rasterToMatch,
+                                                  currentDisturbanceLayer = mod$updatedLayers)
+        
+        sim$currentDisturbanceLayer[paste0("Year", time(sim))] <- mod$updatedLayers$currentDisturbanceLayer
+      }
+      sim <- scheduleEvent(sim, time(sim) + 1, "anthroDisturbance_Generator", "generatingDisturbances")
     },
-    event1 = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
+    updatingDisturbanceList = {
+      if (length(mod$.whichToRun) != 0){
+      sim$disturbanceList <- replaceList(disturbanceList = sim$disturbanceList, 
+                                         updatedLayers = mod$updatedLayers$individuaLayers)
+      if (P(sim)$saveCurrentDisturbances){
+        saveDisturbances(disturbanceList = sim$disturbanceList,
+                         currentTime = time(sim))
+        }
+      }
 
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
+      sim <- scheduleEvent(sim, time(sim) + 1, "anthroDisturbance_Generator", "updatingDisturbanceList")
 
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + increment, "anthroDisturbance_Generator", "templateEvent")
-
-      # ! ----- STOP EDITING ----- ! #
-    },
-    event2 = {
-      # ! ----- EDIT BELOW ----- ! #
-      # do stuff for this event
-
-      # e.g., call your custom functions/methods here
-      # you can define your own methods below this `doEvent` function
-
-      # schedule future event(s)
-
-      # e.g.,
-      # sim <- scheduleEvent(sim, time(sim) + increment, "anthroDisturbance_Generator", "templateEvent")
-
-      # ! ----- STOP EDITING ----- ! #
     },
     warning(paste("Undefined event type: \'", current(sim)[1, "eventType", with = FALSE],
                   "\' in module \'", current(sim)[1, "moduleName", with = FALSE], "\'", sep = ""))
   )
-  return(invisible(sim))
-}
-
-## event functions
-#   - keep event functions short and clean, modularize by calling subroutines from section below.
-
-### template initialization
-Init <- function(sim) {
-  # # ! ----- EDIT BELOW ----- ! #
-
-  # ! ----- STOP EDITING ----- ! #
-
-  return(invisible(sim))
-}
-
-### template for save events
-Save <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # do stuff for this event
-  sim <- saveFiles(sim)
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
-### template for plot events
-plotFun <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # do stuff for this event
-  sampleData <- data.frame("TheSample" = sample(1:10, replace = TRUE))
-  Plots(sampleData, fn = ggplotFn)
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
-### template for your event1
-Event1 <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # THE NEXT TWO LINES ARE FOR DUMMY UNIT TESTS; CHANGE OR DELETE THEM.
-  # sim$event1Test1 <- " this is test for event 1. " # for dummy unit test
-  # sim$event1Test2 <- 999 # for dummy unit test
-
-  # ! ----- STOP EDITING ----- ! #
-  return(invisible(sim))
-}
-
-### template for your event2
-Event2 <- function(sim) {
-  # ! ----- EDIT BELOW ----- ! #
-  # THE NEXT TWO LINES ARE FOR DUMMY UNIT TESTS; CHANGE OR DELETE THEM.
-  # sim$event2Test1 <- " this is test for event 2. " # for dummy unit test
-  # sim$event2Test2 <- 777  # for dummy unit test
-
-  # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
 }
 
@@ -194,16 +296,56 @@ Event2 <- function(sim) {
   #cacheTags <- c(currentModule(sim), "function:.inputObjects") ## uncomment this if Cache is being used
   dPath <- asPath(getOption("reproducible.destinationPath", dataPath(sim)), 1)
   message(currentModule(sim), ": using dataPath '", dPath, "'.")
+  
+  if (!suppliedElsewhere(object = "studyArea", sim = sim)) {
+    sim$studyArea <- prepInputs(url = extractURL("studyArea"),
+                                targetFile = "NT1_BCR6.shp",
+                                alsoExtract = "similar",
+                                destinationPath = dPath)
+    
+    message(crayon::red(paste0("studyArea was not supplied. Defaulting to BCR6+NT1 in the",
+                   " Northwest Territories")))
+  }
+  
+  if (!suppliedElsewhere(object = "rasterToMatch", sim = sim)) {
+    sim$rasterToMatch <- prepInputs(url = extractURL("rasterToMatch"),
+                                    targetFile = "RTM.tif",
+                                    destinationPath = dPath)
+    
+    message(crayon::red(paste0("rasterToMatch was not supplied. Defaulting to BCR6+NT1 in the",
+                   " Northwest Territories")))
+  }
+  
+  if (!suppliedElsewhere(object = "disturbanceList", sim = sim)) {
+    sim$disturbanceList <- unwrapTerraList(terraList = extractURL("disturbanceList"), 
+                                           generalPath = dataPath(sim))
+    
+    message(crayon::red(paste0("disturbanceList was not supplied. The current should only ",
+                   " be used for module testing purposes! Please run the module(s) ",
+                   "`anthroDisturbance_DataPrep` and `potentialResourcesNT_DataPrep`")))
+  }
+  
+  if (!suppliedElsewhere(object = "disturbanceParameters", sim = sim)) {
+    browser()
+    sim$disturbanceParameters <- prepInputs(url = extractURL("disturbanceParameters"),
+                                            targetFile = "disturbanceParameters.csv",
+                                            destinationPath = dPath,
+                                            fun = "data.table::fread",
+                                            header = TRUE, 
+                                            userTags = "disturbanceParameters", purge = 7)
 
-  # ! ----- EDIT BELOW ----- ! #
+    message(crayon::red(paste0("disturbanceParameters was not supplied. Defaulting to an example from ",
+                   " Northwest Territories")))
+  }
+  
+  if (!suppliedElsewhere(object = "rstCurrentBurn", sim = sim)) {
+    
+    message(crayon::red(paste0("rstCurrentBurn was not supplied and is not being generated. ",
+                               "The module will try to recover it from the inputs folder. ",
+                               " If this fails, the forestry activities will be considered ",
+                               "without a fire regime!")))
+  }
 
-  # ! ----- STOP EDITING ----- ! #
   return(invisible(sim))
 }
 
-ggplotFn <- function(data, ...) {
-  ggplot(data, aes(TheSample)) +
-    geom_histogram(...)
-}
-
-### add additional events as needed by copy/pasting from above
