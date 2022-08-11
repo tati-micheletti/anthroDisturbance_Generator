@@ -1,9 +1,17 @@
 generateDisturbances <- function(disturbanceParameters,
                                  disturbanceList,
                                  rasterToMatch,
+                                 studyArea,
                                  currentTime,
+                                 growthStepEnlarging,
                                  currentDisturbanceLayer){
 
+  # Total study area
+  studyArea <- vect(studyArea)
+  studyArea <- project(x = studyArea, y = terra::crs(rasterToMatch))
+  uniStudyArea <- terra::aggregate(studyArea)
+  totalstudyAreaVAreaSqKm <- terra::expanse(uniStudyArea, unit = "km")
+  
   # FIRST: Enlarging
   #############################################
   message("Enlarging disturbances...")
@@ -40,55 +48,165 @@ generateDisturbances <- function(disturbanceParameters,
       # Lines: RECTANGLES
       # Then we need the formula to calculate the buffer based on the increase in
       # area size (parameter from table) using a normal
-      if (geomtype(Lay) == "polygons") {
-        currArea <- terra::expanse(Lay)
-        rCurrA <-  sqrt(currArea / pi) # Using a circle formula
-        desiredArea <- currArea + (currArea * dParOri[["disturbanceRate"]])
-        rDesiredArea <- sqrt(desiredArea / pi) # Using a circle formula
-        expandTo <- rDesiredArea - rCurrA
-        LayUpdated <- terra::buffer(x = Lay, width = expandTo)
-        # To see how far we are from the form assumption we need to do
-        print(paste0("Difference between disturbance rate and change in total area for sector ",
-            Sector, " disturbance type ",ORIGIN))
-        print(format(summary(dParOri[["disturbanceRate"]] - ((terra::expanse(LayUpdated) - currArea) /
-                                                        currArea)), scientific = FALSE))
-      } else {
-        if (geomtype(Lay) == "lines"){
-          currLength <- perim(Lay)
-          # Check if we have the resolution
-          RES <- dParOri[["resolutionVector"]]
-          if (is.null(RES)){
-            message(crayon::red(paste0("resolutionVector in disturbanceParameters",
-                                       " table was not supplied for a lines file vector. Will ",
-                                       "default to 15m. If this is not correct, please provide the ",
-                                       "resolution used for developing the layer ", ORIGIN,
-                                       " (", Sector,")")))
-            RES <- 15
-          }
-          Lay <- terra::buffer(x = Lay, RES)
-          currArea <- terra::expanse(Lay)
-          # NOTE :: Noticed that using the circle formula we have a very small 
-          #         difference in terms of average area gained and expected proportional gain
-          #         So I will not worry now about updating to rectangle formula!  
-          rCurrA <- sqrt(currArea / pi) # Using a circle formula
-          desiredArea <- currArea + (currArea * dParOri[["disturbanceRate"]])
-          rDesiredArea <- sqrt(desiredArea / pi) # Using a circle formula
-          expandTo <- rDesiredArea - rCurrA
-          LayUpdated <- terra::buffer(x = Lay, width = expandTo)
-          # To see how far we are from the form assumption we need to do
-          print(paste0("Difference between disturbance rate and change in total area for sector ",
-                       Sector, " disturbance type ",ORIGIN))
-          print(format(summary(dParOri[["disturbanceRate"]] - ((terra::expanse(LayUpdated) - currArea) /
-                                                          currArea)), scientific = FALSE))
-        } else {
-          if (geomtype(Lay) == "points"){
-            stop("Disturbances as points are still not implemented")
-            # Need to add buffer around points. Maybe this can be done with lines?
-          } else {
-            stop("Enlarging vectors can for now only be polygons or lines")
-          }
+      if (geomtype(Lay) %in% c("lines", "points")){
+        # Check if we have the resolution
+        RES <- dParOri[["resolutionVector"]]
+        if (is.null(RES)){
+          message(crayon::red(paste0("resolutionVector in disturbanceParameters",
+                                     " table was not supplied for a lines file vector. Will ",
+                                     "default to 15m total (7.5m in each direction).",
+                                     "If this is not correct, please provide the ",
+                                     "resolution used for developing the layer ", ORIGIN,
+                                     " (", Sector,")")))
+          RES <- 7.5
         }
+        # NOTE: The buffer value is applied on all sides of the shapefile / line
+        # This means that a 15m buffer ends up being a 30 m increase in the line
+        # in all directions. If the original resolution was 15, then we need to divide it by 2,
+        # so we get in the end a TOTAL increase in of 15 m.
+        Lay <- terra::buffer(x = Lay, RES)
       }
+        currArea <- terra::expanse(Lay, unit = "m")
+        # The dParOri[["disturbanceRate"]] (or disturbRate) is (by default) the calculated difference between
+        # the 2010 and 2015 disturbance divided by the total amount of years, over the entire area
+        # Therefore, it refers to the total study area size. 
+        disturbRate <- dParOri[["disturbanceRate"]]
+        # Disturbance area to add to current:
+        disturbAreaSqKm <- disturbRate*totalstudyAreaVAreaSqKm
+        # Total increase in area to be distributed across all disturbances:
+        disturbAreaSqM <- disturbAreaSqKm * 1000000
+        # What is the % to growth for each disturbance:
+        totalCurrDistArea <- sum(currArea)
+        totalPercGrowth <- disturbAreaSqM/totalCurrDistArea
+        
+        # We will do the buffer iteratively as there are no great solutions for getting the correct 
+        # value by calculations because the polygon's forms is not known.
+        # While totalPercGrowthAchieved is below totalPercGrowth, we will keep increasing the 
+        # buffer value and recalculating it. Past trials are first below:
+        
+        # FOR LINES:
+        # ###################################### KEEPING JUST FOR HISTORICAL REASONS!
+        #TODO Should be deleted after the commit during cleanup
+        # I tested the buffering and using geometric formulas for calculating the exact
+        # buffering for increasing disturbances, but because of the projections none worked well
+        # Therefore, I will apply the same method across all: iteratively increase buffer until 
+        # total area is achieved. 
+        # # TESTING THE RESULTS OF BUFFERING
+        # # generate 2 random XY coords
+        # x_coords <- c(-5, 5) # TOTAL LENGTH = 10
+        # y_coords <- c(0, 0)
+        # # make a unique identifier for each line
+        # ID <- paste0("line_",1:1)
+        # line_obj <- sp::Line(cbind(x_coords, y_coords))
+        # lines_obj <- sp::Lines(list(line_obj), ID = ID)
+        # Line <- sp::SpatialLines(list(lines_obj))
+        # # crs(Line) <- "+init=epsg:4326 +proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"
+        # crs(Line) <- crs(Lay)
+        # lineV <- vect(Line)
+        # bLine <- terra::buffer(x = lineV, RES)
+        # lineA <- terra::expanse(bLine)
+        # raster::plot(bLine, border = "red", lwd = 2)
+        # raster::plot(lineV, border = "blue", lwd = 2, add = TRUE)
+        # #######################################
+        # 
+        # # As we have an oval buffer, we need to use an oval formula instead of a 
+        # # circle:
+        # # # A = pi*a*b
+        # # # Where A is the total area --> terra::expanse(bLine)
+        # # # a is the major axis --> lineLength + 2*RES where lineLength <- perim(lines)
+        # # # b is the minor axis --> 2*RES 
+        # lineLength <- perim(lineV)
+        # A <- pi * (lineLength + 2*RES)/2 * (2*RES)/2
+        # At <- terra::expanse(bLine, transform=F) # Why are these values so different?!?!
+        # 
+        # ######################################
+        # # TESTING THE RESULTS OF BUFFERING
+        # # generate 2 random XY coords
+        # x_coords <- c(0) # TOTAL LENGTH = 10
+        # y_coords <- c(0) # TOTAL LENGTH = 10
+        # # make a unique identifier for each line
+        # ID <- paste0("point_",1:1)
+        # pt_obj <- SpatialPoints(cbind(x_coords, y_coords))
+        # # crs(Line) <- "+init=epsg:4326 +proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"
+        # crs(pt_obj) <- crs(Lay)
+        # lineV <- vect(pt_obj)
+        # bLine <- terra::buffer(x = lineV, RES)
+        # lineA <- terra::expanse(bLine)
+        # lineB <- pi*(RES^2)
+        # lineC <- terra::expanse(bLine, transform = F)
+        # 
+        # 
+        # raster::plot(bLine, border = "red", lwd = 2)
+        # raster::plot(lineV, border = "blue", lwd = 2, add = TRUE)
+        # #######################################
+        
+        # FOR POLYGONS:
+        # # Using a circle formula we get the radius of the current area (we are assuming all polygons are
+        # # more or less circular. It is the best assumption I believe we can make)
+        # rCurrA <-  sqrt(currArea/pi)
+        
+        ################# TRIAL 1
+        # # Now we calculate the new desired area with the added disturbance
+        # desiredArea <- currArea + (currArea * totalPercGrowth)
+        # # Using a circle formula we get the new radius of this area
+        # rDesiredArea1 <- sqrt(desiredArea/pi)
+        # # And now we get the difference between the original area and the desired area radius, 
+        # # which is the buffer we need to increase the area by, and buffer it
+        # expandTo <- rDesiredArea1 - rCurrA 
+        # LayUpdated1 <- terra::buffer(x = Lay, width = expandTo)
+        # NOTE: This works but gives relatively large differences on average, around 3% for 
+        # settlements, for example.
+        
+        ################# TRIAL 2
+        # To correct for polygon shape
+        # Now we calculate the current area and length so we can calculate the compactness of the 
+        # polygon. Since a perfect circle's compactness index will be 1 (fully compact) and then 
+        # the index decreases when the shpae is less compact. Thus a smaller "radius" is needed to 
+        # get the same area (see here https://gis.stackexchange.com/a/140906/209855 credits to 
+        # dof1985).
+        # currArea <- terra::expanse(Lay, unit = "m")
+        # currLength <- perim(Lay)
+        # compactness <- 4*pi*currArea/(currLength^2)
+        # # We then modify the new area size by the compactness of the area
+        # desiredArea <- currArea + (totalPercGrowth * currArea * compactness)
+        # # We then find the radius of the desired area
+        # rDesiredArea <- sqrt(desiredArea/pi)
+        # # And now we get the difference between the original area and the desired area radius,
+        # # which is the buffer we need to increase the area by, and buffer it
+        # expandTo <- rDesiredArea - rCurrA
+        # LayUpdated <- terra::buffer(x = Lay, width = expandTo)
+        # # NOTE: This seems to work better than assuming all polygons are circles and gives 
+        # # relatively smaller differences on average, around 1.3% for settlements, for example.
+        
+        ################# TRIAL 3 -- Will use this!
+        
+        totalPercGrowthAchieved <- 0
+        expandTo <- 0
+        iter <- 1
+        tictoc::tic("Total elapsed time for calculating disturbance percentage: ")
+        while (totalPercGrowthAchieved < totalPercGrowth) {
+          if (iter %% 100 == 0) {
+            message(paste0("Calculating disturbance percentage for ",
+                         ORIGIN, " (iteration ", iter,")"))
+          }
+          expandTo <- expandTo + growthStepEnlarging
+          LayUpdated <- terra::buffer(x = Lay, width = expandTo)
+          totalCurrDistArea <- sum(currArea)
+          futureArea <- terra::expanse(LayUpdated, unit = "m")
+          totalFutureDistArea <- sum(futureArea)
+          totalPercGrowthAchieved <- (totalFutureDistArea-totalCurrDistArea)/totalCurrDistArea
+          iter <- iter + 1 
+        }
+        tictoc::toc()
+        
+        cat(crayon::yellow(paste0("Percentage difference between mean disturbance rate",
+                                  " and mean change in total area for sector ",
+                                  Sector, " disturbance type ", ORIGIN, ": \n",
+                                  crayon::green(format(100*round((totalPercGrowthAchieved - 
+                                                                    totalPercGrowth)/totalPercGrowth, 4), 
+                                                       scientific = FALSE), " %."),
+                                  "\nThis value can help interpret how close the increased areas ",
+                                  "are to the expected increases. The ideal value is 0.")))
       return(LayUpdated)
     })
     names(updatedL) <- whichOrigin
