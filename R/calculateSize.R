@@ -35,7 +35,12 @@ calculateSize <- function(disturbanceParameters,
         sub <- NULL
       }
     } else {
-      allAreas <- expanse(lay)
+      if (class(lay) %in% c("RasterLayer", "SpatRaster")) {
+        message(paste0("The layer ", sub[["dataClass"]], " is not a vector. Trying to convert."))
+        if (lay %in% "RasterLayer") lay <- rast(lay)
+        lay <- as.polygons(lay, dissolve = FALSE)
+      }
+      allAreas <- terra::expanse(lay)
       sub[, disturbanceSize := paste0("rtnorm(1, ", round(mean(allAreas), 2), ", ", round(sd(allAreas), 2), ", lower = 0)")]
       }
     return(sub)
