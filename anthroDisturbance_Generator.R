@@ -26,9 +26,9 @@ defineModule(sim, list(
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
   reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
-                  "PredictiveEcology/reproducible@development",
+                  "data.table", "PredictiveEcology/reproducible@development",
                   "raster", "terra", "crayon", "msm", "rgdal", "sf", 
-                  "fasterize", "stars", "nngeo"),
+                  "fasterize", "stars", "nngeo", "tictoc"),
   parameters = rbind(
     #defineParameter("paramName", "paramClass", value, min, max, "parameter description"),
     defineParameter(".plots", "character", "screen", NA, NA,
@@ -54,8 +54,31 @@ defineModule(sim, list(
                     paste0("Should the disturbance rasters be saved at each step? These are saved ",
                            "to Paths[['outputPath']] as a RasterLayer, with disturbanceLayer as prefix",
                            "the name of the industry and the year as suffix.",
-                           "If TRUE, it saves at the end of each step."))
-    
+                           "If TRUE, it saves at the end of each step.")),
+    defineParameter("useECCCData", "logical", TRUE, NA, NA,
+                    paste0("If the rate of change is not provided, the module can either try to ",
+                    "extract it from data if useECCCData = TRUE (i.e., ECCC human footprint for 2010 and 2015), or ",
+                    "simply apply a rate of 0.2% (of the total area) increase per year")),
+    defineParameter("checkChangeInDisturbance", "logical", FALSE, NA, NA,
+                    paste0("Prints the change in ECCC human footprint (2010 to 2015) at 30m resolution",
+                           " over the shapefile provided")),
+    defineParameter("checkDisturbance2015", "logical", FALSE, NA, NA,
+                    paste0("Prints the total % of ECCC human footprint (2010 to 2015) at 500m resolution",
+                           " over the shapefile provided")),
+    defineParameter("overwriteDisturbanceLayers2015", "logical", FALSE, NA, NA,
+                    paste0("Should the disturbance layer from 2015 be overwritten?")),
+    defineParameter("overwriteDisturbanceLayers2010", "logical", FALSE, NA, NA,
+                    paste0("Should the disturbance layer from 2010 be overwritten?")),
+    defineParameter("growthStepEnlargingPolys", "numeric", 0.0075, NA, NA,
+                    paste0("Growth step used for iteratively achieving the total area growth of ",
+                           "new disturbances type Enlarging for polygons. If the iterations take too",
+                           " long, one should increase this number. If the summarized value is too",
+                           " far from 0, one should decrease this number.")),
+    defineParameter("growthStepEnlargingLines", "numeric", 0.1, NA, NA,
+                    paste0("Growth step used for iteratively achieving the total area growth of ",
+                           "new disturbances type Enlarging for lines. If the iterations take too",
+                           " long, one should increase this number. If the summarized value is too",
+                           " far from 0, one should decrease this number."))
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
@@ -134,8 +157,71 @@ defineModule(sim, list(
                                "It defaults to an example in the Northwest ",
                                "Territories and needs to be provided if the ",
                                "study area is not in this region (i.e., union ",
-                               "of BCR6 and NT1)"), 
+                               "of BCR6 and NT1)"),
                  sourceURL = "https://drive.google.com/file/d/1xJypz-VOA_bHN0y4GYikY25UKID_oTh_/view?usp=sharing"),
+    expectsInput(objectName = "disturbanceDT", objectClass = "data.table", 
+                 desc = paste0("This data.table needs to contain the following",
+                               " columns: ",
+                               
+                               "dataName --> this column groups the type of data ",
+                               "by sector (i.e., Energy, Settlements, OilGas, ",
+                               "Mining, Forestry, Roads)",
+                               
+                               "URL --> URL link for the specific dataset",
+                               
+                               "classToSearch --> exact polygon type/class to ",
+                               "search for when picking from a dataset with ",
+                               "multiple types. If this is not used (i.e., your",
+                               " shapefile is alreday all the data needed), you ",
+                               "should still specify this so each entry has a ",
+                               "different name",
+                               
+                               "fieldToSearch --> where should classToSearch be ",
+                               "found? If this is specified, then the function ",
+                               "will subset the spatial object (most likely a ",
+                               "shapefile) to classToSearch. Only provide this ",
+                               "if this is necessary!",
+                               
+                               "dataClass --> this column details the type of data ",
+                               "further (i.e., Settlements, potentialSettlements ",
+                               "otherPolygons, otherLines, windTurbines, potentialWindTurbines, ",
+                               "hydroStations, oilFacilities, pipelines, etc). ",
+                               "Common class to rename the dataset to, so we ",
+                               "can harmonize different ones. Potential data classes ",
+                               "can be of three general types (that will be ",
+                               "specified in the disturbanceGenerator module as ",
+                               "a parameter -- ALWAYS with 'potential' starting): ",
+                               "1. Enlarging (i.e., potentialSettlements",
+                               " and potentialSeismicLines): where the potential one is ",
+                               "exactly the same as the current layer, and we",
+                               " only buffer it with time",
+                               "2. Generating (i.e., potentialWind, potentialOilGas",
+                               "potentialMineral, potentialForestry): where the ",
+                               "potential layers are only the potential where ",
+                               "structures can appear based on a specific rate",
+                               "3. Connecting (i.e., potentialPipelines, ",
+                               "potentialTransmission, potentialRoads incl. ",
+                               "forestry ones): where the potential layer needs ",
+                               "to have the current/latest transmission, pipeline,",
+                               " and road network. This process will depend on ",
+                               "what is generated in point 2.",
+                               
+                               "fileName --> If the original file is a .zip and ",
+                               "the features are stored in one of more shapefiles",
+                               " inside the .zip, please provide which shapefile ",
+                               " to be used",
+                               
+                               "dataType --> please provide the data type of the ",
+                               "layer to be used. These are the current accepted ",
+                               " formats: 'shapefile' (.shp or .gdb), 'raster' ",
+                               "(.tif, which will be converted into shapefile), ",
+                               "and 'mif' (which will be read as a shapefile).",
+                               
+                               "It defaults to an example in the Northwest ",
+                               "Territories and needs to be provided if the ",
+                               "study area is not in this region (i.e., union ",
+                               "of BCR6 and NT1)"),
+                 sourceURL = "https://drive.google.com/file/d/1wHIz_G088T66ygLK9i89NJGuwO3f6oIu/view?usp=sharing"),
     expectsInput(objectName = "studyArea", 
                  objectClass = "SpatialPolygonDataFrame|vect", 
                  desc = paste0("Study area to which the module should be ",
@@ -161,7 +247,7 @@ defineModule(sim, list(
                                 "class) of disturbances and the potential needed for ",
                                 "generating disturbances. ")),
     createsOutput(objectName = "currentDisturbanceLayer", objectClass = "list", 
-                  desc = paste0("List of rasters with all current disturbances.",
+                  desc = paste0("List (per year) of rasters with all current disturbances.",
                                 "Can be used  for other purposes but was created to filter potential",
                                 " pixels that already have disturbances to avoid choosing new ",
                                 "pixels in existing disturbed ones"))
@@ -175,6 +261,24 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      
+      # Make sure RTM and studyArea projections match
+      sim$studyArea <- projectInputs(sim$studyArea, 
+                                     targetCRS = crs(sim$rasterToMatch))
+
+      ### Make sure that disturbanceDT is data.table      
+      if (any(class(sim$disturbanceDT) != "data.table")){
+        tryCatch({
+          sim$disturbanceDT <- as.data.table(sim$disturbanceDT)
+        }, error = function(e){
+          warning(paste0("disturbanceDT was provided with class ",
+                         class(sim$disturbanceDT), " and conversion to ",
+                         "data.table failed. Please provide this object as a ",
+                         "data.table"), immediate. = TRUE)
+          stop(e)
+        })
+      }
+      
       if (P(sim)$saveInitialDisturbances){
         message(crayon::yellow(paste0("The parameter saveInitialDisturbances is TRUE.",
                                       " Saving initial disturbance layers")))
@@ -211,8 +315,15 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
               length(mod$.whichNeedRates) != 0))
         sim$disturbanceParameters <- calculateRate(disturbanceParameters = sim$disturbanceParameters,
                                                  whichToUpdate = mod$.whichNeedRates,
+                                                 studyArea = sim$studyArea,
                                                  disturbanceList = sim$disturbanceList,
-                                                 RTM = sim$rasterToMatch)
+                                                 RTM = sim$rasterToMatch,
+                                                 useECCCData = P(sim)$useECCCData,
+                                                 disturbanceDT = sim$disturbanceDT,
+                                                 checkChangeInDisturbance = P(sim)$checkChangeInDisturbance,
+                                                 checkDisturbance2015 = P(sim)$checkDisturbance2015,
+                                                 overwriteDisturbanceLayers2010 = P(sim)$overwriteDisturbanceLayers2010,
+                                                 overwriteDisturbanceLayers2015 = P(sim)$overwriteDisturbanceLayers2015)
       },
     generatingDisturbances = {
       # Check if the time(sim) is within the interval to run the disturbances
@@ -241,19 +352,24 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
         }, error = function(e){
           return(NULL) 
         })
-        
-        mod$updatedLayers <- generateDisturbances(disturbanceParameters = sim$disturbanceParameters[dataName != "forestry"|disturbanceOrigin != "cutblocks", ],
+        mod$updatedLayers <- generateDisturbances(disturbanceParameters = sim$disturbanceParameters,
+                                                  # disturbanceParameters = sim$disturbanceParameters[disturbanceOrigin != "cutblocks", ],
                                                   disturbanceList = sim$disturbanceList,
+                                                  # disturbanceList = sim$disturbanceList[names(sim$disturbanceList) != "forestry"],
                                                   currentTime = time(sim),
+                                                  studyArea = sim$studyArea,
                                                   rasterToMatch = sim$rasterToMatch,
-                                                  currentDisturbanceLayer = currDis)
-        
-        mod$updatedLayers <- generateDisturbances_forestry(disturbanceParameters = sim$disturbanceParameters[dataName == "forestry"|disturbanceOrigin != "cutblocks", ],
-                                                  disturbanceList = sim$disturbanceList,
                                                   fires = mod$rstCurrentBurn,
-                                                  currentTime = time(sim),
-                                                  rasterToMatch = sim$rasterToMatch,
-                                                  currentDisturbanceLayer = mod$updatedLayers)
+                                                  currentDisturbanceLayer = currDis,
+                                                  growthStepEnlargingPolys = P(sim)$growthStepEnlargingPolys,
+                                                  growthStepEnlargingLines = P(sim)$growthStepEnlargingLines)
+        
+        # mod$updatedLayers <- generateDisturbances_forestry(disturbanceParameters = sim$disturbanceParameters[disturbanceOrigin == "cutblocks", ],
+        #                                           disturbanceList = sim$disturbanceList[names(sim$disturbanceList) == "forestry"],
+        #                                           fires = mod$rstCurrentBurn,
+        #                                           currentTime = time(sim),
+        #                                           rasterToMatch = sim$rasterToMatch,
+        #                                           currentDisturbanceLayer = mod$updatedLayers)
         
         sim$currentDisturbanceLayer[paste0("Year", time(sim))] <- mod$updatedLayers$currentDisturbanceLayer
       }
@@ -326,13 +442,12 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   }
   
   if (!suppliedElsewhere(object = "disturbanceParameters", sim = sim)) {
-    browser()
     sim$disturbanceParameters <- prepInputs(url = extractURL("disturbanceParameters"),
                                             targetFile = "disturbanceParameters.csv",
                                             destinationPath = dPath,
                                             fun = "data.table::fread",
                                             header = TRUE, 
-                                            userTags = "disturbanceParameters", purge = 7)
+                                            userTags = "disturbanceParameters")
 
     message(crayon::red(paste0("disturbanceParameters was not supplied. Defaulting to an example from ",
                    " Northwest Territories")))
@@ -344,6 +459,18 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                "The module will try to recover it from the inputs folder. ",
                                " If this fails, the forestry activities will be considered ",
                                "without a fire regime!")))
+  }
+  
+  if (!suppliedElsewhere(object = "disturbanceDT", sim = sim)) {
+    sim$disturbanceDT <- prepInputs(url = extractURL("disturbanceDT"),
+                                    targetFile = "disturbanceDT.csv",
+                                    destinationPath = dPath,
+                                    fun = "data.table::fread",
+                                    header = TRUE, 
+                                    userTags = "disturbanceDT")
+    
+    warning(paste0("disturbanceDT was not supplied. Defaulting to an example from ",
+                   " Northwest Territories"), immediate. = TRUE)
   }
 
   return(invisible(sim))
