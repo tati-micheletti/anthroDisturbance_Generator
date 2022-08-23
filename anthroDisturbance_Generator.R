@@ -200,7 +200,7 @@ defineModule(sim, list(
                                "potential layers are only the potential where ",
                                "structures can appear based on a specific rate",
                                "3. Connecting (i.e., potentialPipelines, ",
-                               "potentialTransmission, potentialRoads incl. ",
+                               "potentialRoads incl. ",
                                "forestry ones): where the potential layer needs ",
                                "to have the current/latest transmission, pipeline,",
                                " and road network. This process will depend on ",
