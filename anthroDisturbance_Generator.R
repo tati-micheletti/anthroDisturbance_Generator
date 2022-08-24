@@ -20,7 +20,7 @@ defineModule(sim, list(
                                 comment = NULL)), 
                       class = "person"),
   childModules = character(0),
-  version = list(anthroDisturbance_Generator = "0.0.0.9000"),
+  version = list(anthroDisturbance_Generator = "0.0.1"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -353,9 +353,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
           return(NULL) 
         })
         mod$updatedLayers <- generateDisturbances(disturbanceParameters = sim$disturbanceParameters,
-                                                  # disturbanceParameters = sim$disturbanceParameters[disturbanceOrigin != "cutblocks", ],
                                                   disturbanceList = sim$disturbanceList,
-                                                  # disturbanceList = sim$disturbanceList[names(sim$disturbanceList) != "forestry"],
                                                   currentTime = time(sim),
                                                   studyArea = sim$studyArea,
                                                   rasterToMatch = sim$rasterToMatch,
@@ -363,13 +361,6 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                   currentDisturbanceLayer = currDis,
                                                   growthStepEnlargingPolys = P(sim)$growthStepEnlargingPolys,
                                                   growthStepEnlargingLines = P(sim)$growthStepEnlargingLines)
-        
-        # mod$updatedLayers <- generateDisturbances_forestry(disturbanceParameters = sim$disturbanceParameters[disturbanceOrigin == "cutblocks", ],
-        #                                           disturbanceList = sim$disturbanceList[names(sim$disturbanceList) == "forestry"],
-        #                                           fires = mod$rstCurrentBurn,
-        #                                           currentTime = time(sim),
-        #                                           rasterToMatch = sim$rasterToMatch,
-        #                                           currentDisturbanceLayer = mod$updatedLayers)
         
         sim$currentDisturbanceLayer[paste0("Year", time(sim))] <- mod$updatedLayers$currentDisturbanceLayer
       }
