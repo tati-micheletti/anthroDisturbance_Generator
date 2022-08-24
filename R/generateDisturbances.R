@@ -238,7 +238,6 @@ generateDisturbances <- function(disturbanceParameters,
         # Second: remove fires
         if (!is.null(fires))
           potLayF[fires[] == 1] <- NA
-        
         # Third: give preference to cutblocks that are closer to current cutblocks
         # Using terra is quicker!
         # # WITH NWT DATA, THE FOLLOWING LINES ARE USELESS AS ALL FOREST IS CLOSE ENOUGH
@@ -422,7 +421,7 @@ generateDisturbances <- function(disturbanceParameters,
     disturbanceEnd <- dPar[index, disturbanceEnd]
       # 1. Get the info on which layer to connect to which layer
       # 2. Get the origin layer (from Generated)
-        oriLay <- Generated[[]][[disturbanceOrigin]]
+        oriLay <- Generated[[Sector]][[disturbanceOrigin]]
         if (is.null(oriLay)) {
           # Find alternative dataName for roads
           foundSectors <- unique(dPar[disturbanceOrigin == dPar[index, disturbanceOrigin], dataName])
@@ -434,14 +433,16 @@ generateDisturbances <- function(disturbanceParameters,
             # one that has connecting from mines to roads, but no other 
             # layer in disturbanceParameters[disturbanceType  %in% "Connecting", ]
             oriLay <- Generated[[disturbanceOrigin]][[disturbanceOrigin]]
-            if (all(is.null(oriLay),
-                    disturbanceOrigin == "cutblocks")){
+            if (is.null(oriLay)){
+              if (disturbanceOrigin == "cutblocks") {
               oriLay <- Generated[["forestry"]][[disturbanceOrigin]]
-            } else {
-              stop(paste0("The disturbance origin layer (", Sector," for ", disturbanceOrigin,
+              }
+              if (is.null(oriLay)){
+                stop(paste0("The disturbance origin layer (", Sector," for ", disturbanceOrigin,
                           ") couldn't be found in the disturbanceList. Please debug"))
+                }
+              } # Bug catch for mismatches between disturbanceOrigin and the layers
           }
-        } # Bug catch for mismatches between disturbanceOrigin and the layers
         }
         # available
         # 3. Get the end layer (from )
@@ -460,7 +461,7 @@ generateDisturbances <- function(disturbanceParameters,
           if (is.null(endLay)){
             endLay <- Generated[[disturbanceOrigin]][[disturbanceOrigin]]
             if (is.null(endLay)){
-              stop(paste0("The disturbance origin layer (", Sector," for ", disturbanceOrigin,
+              stop(paste0("The disturbance end layer (", Sector," for ", disturbanceOrigin,
                           ") couldn't be found in the disturbanceList. Please debug"))
             }
           } # Bug catch for mismatches between disturbanceOrigin and the layers
@@ -474,22 +475,26 @@ generateDisturbances <- function(disturbanceParameters,
         oriLayVect <- as.polygons(oriLay, dissolve = FALSE)
         connected <- nngeo::st_connect(st_as_sf(oriLayVect), sf::st_as_sf(endLay), 
                                        ids = NULL, progress = TRUE)
-        if ("resolutionVector" %in% dPar){
-          RES <- dPar[index, resolutionVector]/2
-        } else RES <- NULL
-        if (any(is.na(RES),
-                is.null(RES))){
-          message(crayon::red(paste0("resolutionVector in disturbanceParameters",
-                                     " table was not supplied for a lines file vector. Will ",
-                                     "default to 15m total (7.5m in each direction).",
-                                     "If this is not correct, please provide the ",
-                                     "resolution used for developing the layer ", disturbanceOrigin,
-                                     " (", Sector,")")))
-          RES <- 7.5
-        }
-        connectedLay <- terra::buffer(x = vect(connected), width = RES)
-        connectedLay[["Class"]] <- na.omit(unique(endLay[["Class"]]))
-        Lay <- list(connectedLay)
+        # I was buffering, but I don't think I need to... If I do, I need to add the explanation here!
+        # if ("resolutionVector" %in% dPar){
+        #   RES <- dPar[index, resolutionVector]/2
+        # } else RES <- NULL
+        # if (any(is.na(RES),
+        #         is.null(RES))){
+        #   message(crayon::red(paste0("resolutionVector in disturbanceParameters",
+        #                              " table was not supplied for a lines file vector. Will ",
+        #                              "default to 15m total (7.5m in each direction).",
+        #                              "If this is not correct, please provide the ",
+        #                              "resolution used for developing the layer ", disturbanceOrigin,
+        #                              " (", Sector,")")))
+        #   RES <- 7.5
+        # }
+        # connectedLay <- terra::buffer(x = vect(connected), width = RES)
+        # connectedLay[["Class"]] <- na.omit(unique(endLay[["Class"]]))
+        # Lay <- list(connectedLay)
+        connected <- vect(connected) # Added this when commented out above
+        connected[["Class"]] <- na.omit(unique(endLay[["Class"]]))
+        Lay <- list(connected)
         names(Lay) <- disturbanceEnd
         return(Lay)
   })
@@ -536,12 +541,33 @@ generateDisturbances <- function(disturbanceParameters,
       if (!class(ras) %in% c("RasterLayer", "SpatRaster")){
         message(paste0("Converting ", Class, " of ", SECTOR, " to a raster..."))
         # Now we fasterize so this is used to exclude pixels that have already been disturbed
-        currDistSF <- sf::st_as_sf(x = ras)
+        # As some of these are lines, we will need to buffer them so they become polygons at
+        # the original resolution they had in the dataset
+        if (!is(ras, "SpatVector"))
+          ras <- vect(ras)
+        if  (terra::geomtype(ras) %in% c("points", "lines")) {
+          if ("resolutionVector" %in% dPar){
+            RES <- unique(dPar[disturbanceEnd == Class, resolutionVector])/2
+          } else RES <- NULL
+          if (any(is.na(RES),
+                  is.null(RES))){
+            message(crayon::red(paste0("resolutionVector in disturbanceParameters",
+                                       " table was not supplied for a lines file vector. Will ",
+                                       "default to 15m total (7.5m in each direction).",
+                                       "If this is not correct, please provide the ",
+                                       "resolution used for developing the layer ", Class,
+                                       " (", SECTOR,")")))
+            RES <- 7.5
+          }
+          currDistT <- terra::buffer(x = ras, width = RES)
+        }  else {
+          currDistT <- ras
+        }
+        currDistSF <- sf::st_as_sf(x = currDistT)
         currDistSF$disturbance <- 1
         fld <- "disturbance"
-        currentDisturbanceLay <- fasterize::fasterize(sf = st_collection_extract(currDistSF, "POLYGON"),
-                                                      raster = rasterToMatch, field = fld)
-        
+        currentDisturbanceLay <- suppressWarnings(fasterize::fasterize(sf = st_collection_extract(currDistSF, "POLYGON"),
+                                                      raster = rasterToMatch, field = fld))
         # NOTE: 
         # Seems that the fasterize is not picking up roads from currDistSF, which makes sense considering they are 
         # much smaller than the resolution... However, this layer is just so we exclude the pixels that 
