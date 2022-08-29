@@ -1,7 +1,7 @@
 replaceList <- function(disturbanceList, 
                         updatedLayers){
   
-  lapply(names(disturbanceList), function(Sector) {
+ externalLays <- lapply(names(disturbanceList), function(Sector) {
     # Layers available for updates
     upToDate <- updatedLayers[which(names(updatedLayers) == Sector)] # As I have repeated names (i.e., for 
     # energy I have 2 layers named Energy, one for windTurbines and one for powerLines), I need a 
@@ -11,7 +11,10 @@ replaceList <- function(disturbanceList,
     upToDate <- unlist(upToDate)
     
     # Merge the updated lists with the current disturbance ones:
-    lapply(names(upToDate), function(layName) {
+    # Get all potential names. Will be used internally and externally in the lapply
+    potentialLayName <- names(disturbanceList[[Sector]])[grepl(x = names(disturbanceList[[Sector]]), 
+                                                               pattern = "potential")]
+    internalLays <- lapply(names(upToDate), function(layName) {
 
       # Currently disturbed 
       pastDist <- disturbanceList[[Sector]][[layName]]
@@ -47,48 +50,61 @@ replaceList <- function(disturbanceList,
                         ". Code development is needed!"))
           }
         } else { # Objects share the same class
-          if (geomtype(pastDist) == geomtype(currDist)) { # Works only if both are vectors!
-            # CASE 1: same type of geometry: means we generated the new disturbances and can just combine them:
-            if (geomtype(pastDist) == "lines"){
-              tictoc::tic(paste0("Elapsed time for merging ", layName, " (", Sector, ")"))
-              unified <- rbind(pastDist, currDist)
-              #TODO Should I aggregate lines just for consistency? It also works when I don't...
-              unified <- terra::aggregate(unified) # This does lose all info and converts all geometries to one.
-              unified[["Class"]] <- as.character(unique(currDist[["Class"]]))
-              tictoc::toc()
-            } else { # For polygons
+          if (class(pastDist) %in% c("RasterLayer", "SpatRaster")){
+            unified <- pastDist
+            unified[currDist == 1] <- 1
+          } else {
+            if (geomtype(pastDist) == geomtype(currDist)) { # Works only if both are vectors!
+              # CASE 1: same type of geometry: means we generated the new disturbances and can just combine them:
+              if (geomtype(pastDist) == "lines"){
+                tictoc::tic(paste0("Elapsed time for merging ", layName, " (", Sector, ")"))
+                unified <- rbind(pastDist, currDist)
+                #TODO Should I aggregate lines just for consistency? It also works when I don't...
+                unified <- terra::aggregate(unified) # This does lose all info and converts all geometries to one.
+                unified[["Class"]] <- as.character(unique(currDist[["Class"]]))
+                tictoc::toc()
+              } else { # For polygons
+                tictoc::tic(paste0("Elapsed time for merging ", layName, " (", Sector, ")"))
+                unified <- rbind(pastDist, currDist) # Doubles the features when we need to overlay/unify these
+                unified <- terra::aggregate(unified) # This does lose all info and converts all geometries to one.
+                unified[["Class"]] <- as.character(unique(currDist[["Class"]]))
+                tictoc::toc()
+              }
+            } else {
+              # CASE 2: different type of geometry: means we enlarged the new disturbances and need to 
+              # combine them (in most cases this will likely mean replace them):
+              pastDist <- terra::buffer(pastDist, width = 0.00001)
+              currDist <- terra::buffer(currDist, width = 0.00001)
               tictoc::tic(paste0("Elapsed time for merging ", layName, " (", Sector, ")"))
               unified <- rbind(pastDist, currDist) # Doubles the features when we need to overlay/unify these
               unified <- terra::aggregate(unified) # This does lose all info and converts all geometries to one.
+              # However, I don't think it is a problem in my case.
+              # If I need to differenciate, I can work on this a
+              # bit more and attribute a specific value for each
+              # geometry and pass the `by` argument to the aggregate.
               unified[["Class"]] <- as.character(unique(currDist[["Class"]]))
+              # Other options tried:
+              # unified <- terra::union(pastDist, currDist) # Makes a list of all combinations of all geometries. Not what I want.
+              # unified <- terra::intersect(pastDist, currDist) # No way! Way too long
+              # unified <- c(pastDist, currDist) # Nope! Not what I am looking for  
+              # unified <- rbind(pastDist, currDist) # Doubles the features when we need to overlay/unify these
               tictoc::toc()
             }
-          } else {
-            # CASE 2: different type of geometry: means we enlarged the new disturbances and need to 
-            # combine them (in most cases this will likely mean replace them):
-            pastDist <- terra::buffer(pastDist, width = 0.00001)
-            currDist <- terra::buffer(currDist, width = 0.00001)
-            tictoc::tic(paste0("Elapsed time for merging ", layName, " (", Sector, ")"))
-            unified <- rbind(pastDist, currDist) # Doubles the features when we need to overlay/unify these
-            unified <- terra::aggregate(unified) # This does lose all info and converts all geometries to one.
-                                                 # However, I don't think it is a problem in my case.
-                                                 # If I need to differenciate, I can work on this a
-                                                 # bit more and attribute a specific value for each
-                                                 # geometry and pass the `by` argument to the aggregate.
-            unified[["Class"]] <- as.character(unique(currDist[["Class"]]))
-            # Other options tried:
-            # unified <- terra::union(pastDist, currDist) # Makes a list of all combinations of all geometries. Not what I want.
-            # unified <- terra::intersect(pastDist, currDist) # No way! Way too long
-            # unified <- c(pastDist, currDist) # Nope! Not what I am looking for  
-            # unified <- rbind(pastDist, currDist) # Doubles the features when we need to overlay/unify these
-            tictoc::toc()
           }
         }
       }
-      
-      # Replace the lists that I have
-      disturbanceList[[Sector]][[layName]] <- unified
+      if (all(which(names(upToDate) == layName) == 1,
+              length(potentialLayName) > 0)) {
+        # if layName is the first one in the lapply, add the potential ones too
+        unified <- append(disturbanceList[[Sector]][potentialLayName], unified)
+      }
+    return(unified)
     })
+    # Need to unlist whatever is listed here
+    internalLays <- unlist(internalLays)
+    names(internalLays) <- c(potentialLayName, names(upToDate))
+    return(internalLays)
   })
-  return(disturbanceList)
+ names(externalLays) <- names(disturbanceList)
+ return(externalLays)
 }
