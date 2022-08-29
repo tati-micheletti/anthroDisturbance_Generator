@@ -3,6 +3,7 @@ title: "anthroDisturbance_Generator"
 author: "Tati Micheletti"
 date: "16 July 2022"
 output:
+  pdf_document: default
   html_document:
     keep_md: yes
 editor_options:
@@ -90,7 +91,7 @@ This module has a couple parameters that can be adjusted by the user. Namely:
 - `growthStepEnlargingLines`: This is a numeric and defaults to `0.1`. Growth step used for iteratively achieving the total area growth of new disturbances type Enlarging for lines. If the iterations take too long, one should increase this number. If the summarized value is too far from 0, one should decrease this number.    
 
 
-```{r moduleParams, echo = FALSE, eval = TRUE}
+```{r moduleParams}
 df_params <- SpaDES.core::moduleParams("anthroDisturbance_Generator", moduleDir)
 knitr::kable(df_params)
 ```
@@ -139,7 +140,7 @@ The module expects only one input.
   + `dataType`: Provide the data type of the layer to be used. These are the current accepted  formats: 'shapefile' (.shp or .gdb), 'raster' (.tif, which will be converted into shapefile), and 'mif' (which will be read as a shapefile). The last defaults to an example in the Northwest Territories and needs to be provided if the study area is not in this region (i.e., union of BCR6 and NT1).  
 Other inputs needed by this module are the the study area (`studyArea`) and a raster (`rasterToMatch``) that matches the study area and provides the spatial resolution for the simulations.  
 
-```{r moduleInputs, echo = FALSE, eval = TRUE}
+```{r moduleInputs}
 df_inputs <- SpaDES.core::moduleInputs("anthroDisturbance_Generator", moduleDir)
 knitr::kable(df_inputs)
 ```
@@ -151,7 +152,7 @@ The module outputs the following two objects:
 - `disturbanceList`: Updated list (general category) of lists (specific class) of disturbances and the potential needed for generating disturbances;
 - `currentDisturbanceLayer`: List (per year) of rasters with all current disturbances. Can be used  for other purposes but was created to filter potential pixels that already have disturbances to avoid choosing new pixels in existing disturbed ones.
 
-```{r moduleOutputs, echo = FALSE, eval = TRUE}
+```{r moduleOutputs}
 df_outputs <- SpaDES.core::moduleOutputs("anthroDisturbance_Generator", moduleDir)
 knitr::kable(df_outputs)
 ```
