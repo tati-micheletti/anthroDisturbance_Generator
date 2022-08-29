@@ -38,13 +38,14 @@ createModObject <- function(data,
     message(crayon::yellow(paste0(data, " not supplied by another module.",
                                   " Will try using files in inputPath(sim)")))
     if (length(list.files(pathInput,
-                          recursive = TRUE)) == 0)
+                          recursive = TRUE)) == 0) {
       if (returnNULL){
         message(crayon::red(paste0("The file for ", data, " was not found. Returning NULL")))
         return(NULL)
       } else {
         stop(paste0("Please place the data in the input folder ", pathInput))
       }
+  }
     if (class(currentTime) != "numeric")
       stop("Current time needs to be numeric!")
     dataName <- grepMulti(x = list.files(pathInput,
@@ -55,11 +56,11 @@ createModObject <- function(data,
     } else {
       dt <- do.call(what = fun, args = list(file.path(pathInput, dataName)))
     }
-    if (!is.null(dt))
+    if (!is.null(dt)){
       message(paste0(data, " loaded from " ,
                      crayon::magenta(file.path(pathInput, dataName)),
-                     " for year ", SpaDES.core::paddedFloatToChar(currentTime, padL = 3))) else
-                       message(crayon::red(paste0("No file found for ", currentTime,". Returning NULL")))
+                     " for year ", SpaDES.core::paddedFloatToChar(currentTime, padL = 3)))
+    } else message(crayon::red(paste0("No file found for ", currentTime,". Returning NULL")))
   }
   return(dt)
 }
