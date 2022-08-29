@@ -9,11 +9,6 @@ generateDisturbances <- function(disturbanceParameters,
                                  currentDisturbanceLayer){
 
   # Extracting layers from previous ones
-  if (!is.null(currentDisturbanceLayer)){
-      individuaLayers <- currentDisturbanceLayer$individuaLayers
-      currentDisturbanceLayer <- currentDisturbanceLayer$currentDisturbanceLayer
-  }
-  
   # Total study area
   studyArea <- vect(studyArea)
   studyArea <- project(x = studyArea, y = terra::crs(rasterToMatch))
@@ -211,6 +206,7 @@ generateDisturbances <- function(disturbanceParameters,
        
       # 1. Get the potential layer
       potLay <- disturbanceList[[Sector]][[dParOri[["dataClass"]]]]
+      
       # 2. Fasterize it
       potLaySF <- sf::st_as_sf(x = potLay)
       potField <- dParOri[["potentialField"]]
