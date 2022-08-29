@@ -283,7 +283,8 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
         message(crayon::yellow(paste0("The parameter saveInitialDisturbances is TRUE.",
                                       " Saving initial disturbance layers")))
         saveDisturbances(disturbanceList = sim$disturbanceList,
-                         currentTime = "IC", overwrite = TRUE)
+                         currentTime = "IC", 
+                         overwrite = TRUE)
       }
 
       mod$.whichToRun <- whichDisturbancesToGenerate(startTime = start(sim),
@@ -345,7 +346,6 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
             mod$rstCurrentBurn <- sim$rstCurrentBurn
           }
         }
-        
         currDis <- tryCatch({
           tail(sim$currentDisturbanceLayer,
                n = 1)[[1]]
@@ -361,7 +361,6 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                   currentDisturbanceLayer = currDis,
                                                   growthStepEnlargingPolys = P(sim)$growthStepEnlargingPolys,
                                                   growthStepEnlargingLines = P(sim)$growthStepEnlargingLines)
-        
         sim$currentDisturbanceLayer[paste0("Year", time(sim))] <- mod$updatedLayers$currentDisturbanceLayer
       }
       sim <- scheduleEvent(sim, time(sim) + 1, "anthroDisturbance_Generator", "generatingDisturbances")
@@ -370,9 +369,11 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       if (length(mod$.whichToRun) != 0){
       sim$disturbanceList <- replaceList(disturbanceList = sim$disturbanceList, 
                                          updatedLayers = mod$updatedLayers$individuaLayers)
+      
       if (P(sim)$saveCurrentDisturbances){
         saveDisturbances(disturbanceList = sim$disturbanceList,
-                         currentTime = time(sim))
+                         currentTime = time(sim), 
+                         overwrite = TRUE)
         }
       }
 
