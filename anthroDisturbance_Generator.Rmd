@@ -36,8 +36,7 @@ options(reproducible.useTerra = FALSE) # Workaround while reproducible is not ye
 moduleDir <- dirname(getwd())
   
 setPaths(modulePath = moduleDir,
-         # cachePath = checkPath(file.path(getwd(), "cache"), 
-         cachePath = checkPath(file.path(moduleDir, "potentialResourcesNT_DataPrep", "cache"), 
+         cachePath = checkPath(file.path(getwd(), "cache"),
                                create = TRUE), 
          outputPath = checkPath(file.path(getwd(), "outputs"), 
                                create = TRUE),
@@ -50,7 +49,7 @@ getPaths() # shows where the 4 relevant paths are
 
 
 
-times <- list(start = 2011, end = 2041)
+times <- list(start = 2011, end = 2051)
 
 parameters <- list(
     #.progress = list(type = "text", interval = 1), # for a progress bar
