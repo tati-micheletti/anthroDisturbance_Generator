@@ -20,7 +20,7 @@ defineModule(sim, list(
                                 comment = NULL)), 
                       class = "person"),
   childModules = character(0),
-  version = list(anthroDisturbance_Generator = "0.0.1"),
+  version = list(anthroDisturbance_Generator = "0.0.2"),
   timeframe = as.POSIXlt(c(NA, NA)),
   timeunit = "year",
   citation = list("citation.bib"),
@@ -78,7 +78,13 @@ defineModule(sim, list(
                     paste0("Growth step used for iteratively achieving the total area growth of ",
                            "new disturbances type Enlarging for lines. If the iterations take too",
                            " long, one should increase this number. If the summarized value is too",
-                           " far from 0, one should decrease this number."))
+                           " far from 0, one should decrease this number.")),
+    defineParameter(".runName", "character", "run1", NA, NA,
+                    paste0("If you would like your simulations' results to have an appended name ",
+                           "(i.e., replicate number, study area, etc) you can use this parameter")),
+    defineParameter(".inputFolderFireLayer", "character", Paths[["inputPath"]], NA, NA,
+                    paste0("If you have the fire (i.e., rstCurrBurn) in a folder that is NOT the ",
+                           "inputs folder, you can pass it here"))
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
@@ -153,6 +159,9 @@ defineModule(sim, list(
                                
                                "disturbanceInterval --> interval for which ",
                                "this disturbance should happen ",
+                               
+                               "resolutionVector --> original resolution ",
+                               "of the data that generated this vector ",
                                
                                "It defaults to an example in the Northwest ",
                                "Territories and needs to be provided if the ",
@@ -339,9 +348,12 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
             # Try to get rstCurrentBurn if no module is producing it!
             mod$rstCurrentBurn <- createModObject(data = "rstCurrentBurn", 
                                                   sim = sim, 
-                                                  pathInput = inputPath(sim), 
+                                                  pathInput = P(sim)$.inputFolderFireLayer, 
                                                   currentTime = time(sim),
-                                                  returnNULL = TRUE)
+                                                  returnNULL = TRUE,
+                                                  fun = raster::raster)
+            if (!is.null(mod$rstCurrentBurn))
+              message(crayon::green("Fire layer found in inputs folder! Using it for the simulation."))
           } else {
             mod$rstCurrentBurn <- sim$rstCurrentBurn
           }
@@ -360,7 +372,8 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                   fires = mod$rstCurrentBurn,
                                                   currentDisturbanceLayer = currDis,
                                                   growthStepEnlargingPolys = P(sim)$growthStepEnlargingPolys,
-                                                  growthStepEnlargingLines = P(sim)$growthStepEnlargingLines)
+                                                  growthStepEnlargingLines = P(sim)$growthStepEnlargingLines,
+                                                  runName = P(sim)$.runName)
         sim$currentDisturbanceLayer[paste0("Year", time(sim))] <- mod$updatedLayers$currentDisturbanceLayer
       }
       sim <- scheduleEvent(sim, time(sim) + 1, "anthroDisturbance_Generator", "generatingDisturbances")
@@ -373,7 +386,8 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       if (P(sim)$saveCurrentDisturbances){
         saveDisturbances(disturbanceList = sim$disturbanceList,
                          currentTime = time(sim), 
-                         overwrite = TRUE)
+                         overwrite = TRUE,
+                         runName = P(sim)$.runName)
         }
       }
 
