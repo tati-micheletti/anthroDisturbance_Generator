@@ -6,7 +6,8 @@ generateDisturbances <- function(disturbanceParameters,
                                  currentTime,
                                  growthStepEnlargingPolys,
                                  growthStepEnlargingLines,
-                                 currentDisturbanceLayer){
+                                 currentDisturbanceLayer,
+                                 runName){
 
   # Extracting layers from previous ones
   # Total study area
@@ -172,6 +173,19 @@ generateDisturbances <- function(disturbanceParameters,
                                                        scientific = FALSE), " %."),
                                   "\nThis value can help interpret how close the increased areas ",
                                   "are to the expected increases. The ideal value is 0.\n")))
+        
+        cat(paste0(Sector, 
+                   " ", 
+                   ORIGIN, 
+                   " ",
+                   currentTime,
+                   " ",
+                   format(100*round((totalPercGrowthAchieved - totalPercGrowth)/totalPercGrowth, 8), 
+                          scientific = FALSE)),
+            file = file.path(Paths[["outputPath"]], paste0("PercentageDisturbances_", currentTime, 
+                                                           "_", runName, ".txt")),
+            append = TRUE, sep = "\n")
+        
       return(LayUpdated)
     })
     names(updatedL) <- whichOrigin
@@ -211,7 +225,9 @@ generateDisturbances <- function(disturbanceParameters,
       potLaySF <- sf::st_as_sf(x = potLay)
       potField <- dParOri[["potentialField"]]
       
-      if (any(is.na(potField), potField == "")){ # If NA, it doesn't matter, but need to create a 
+      if (any(is.na(potField), 
+              potField == "",
+              is.null(potField))){ # If NA, it doesn't matter, but need to create a 
         # field so not the whole thing becomes one big 1 map
         potLaySF$Potential <- 1
         potField <- "Potential"
@@ -227,9 +243,9 @@ generateDisturbances <- function(disturbanceParameters,
                        "occurred fires and currently productive forest"))
         
         # First: Select only productive forests
-        potLaySF_old <- potLaySF[potLaySF$ORIGIN < (currentTime - 50), ]
-        
-        potLayF <- fasterize::fasterize(sf = st_collection_extract(potLaySF_old, "POLYGON"),
+        # potLaySF <- potLaySF[potLaySF$ORIGIN < (currentTime - 50), ] # For some weird reason, this doesn't work anymore... sigh.
+        potLaySF <- subset(potLaySF, potLaySF$ORIGIN < (currentTime - 50))
+        potLayF <- fasterize::fasterize(sf = st_collection_extract(potLaySF, "POLYGON"),
                                         raster = rasterToMatch, field = potField)
         # Second: remove fires
         if (!is.null(fires))
@@ -400,6 +416,20 @@ generateDisturbances <- function(disturbanceParameters,
                                                    scientific = FALSE), " %."),
                                 "\nThis value can help interpret how close the increased areas ",
                                 "are to the expected increases. The ideal value is 0.\n")))
+      cat(paste0(Sector, 
+                 " ", 
+                 ORIGIN, 
+                 " ",
+                 currentTime,
+                 " ",
+                 format(100*round((length(whichPixelsChosen) - 
+                                     expectedDistPixels)/expectedDistPixels, 8), 
+                        scientific = FALSE)),
+          file = file.path(Paths[["outputPath"]], paste0("PercentageDisturbances_", currentTime, 
+                                                         "_", runName, ".txt")),
+          append = TRUE, sep = "\n")
+      
+      
       return(newDistLay)
     })
     names(updatedL) <- whichOrigin
@@ -469,27 +499,28 @@ generateDisturbances <- function(disturbanceParameters,
         # 0's and one for 1's):
         oriLay[oriLay != 1] <- NA
         oriLayVect <- as.polygons(oriLay, dissolve = FALSE)
-        connected <- nngeo::st_connect(st_as_sf(oriLayVect), sf::st_as_sf(endLay), 
-                                       ids = NULL, progress = TRUE)
-        # I was buffering, but I don't think I need to... If I do, I need to add the explanation here!
-        # if ("resolutionVector" %in% dPar){
-        #   RES <- dPar[index, resolutionVector]/2
-        # } else RES <- NULL
-        # if (any(is.na(RES),
-        #         is.null(RES))){
-        #   message(crayon::red(paste0("resolutionVector in disturbanceParameters",
-        #                              " table was not supplied for a lines file vector. Will ",
-        #                              "default to 15m total (7.5m in each direction).",
-        #                              "If this is not correct, please provide the ",
-        #                              "resolution used for developing the layer ", disturbanceOrigin,
-        #                              " (", Sector,")")))
-        #   RES <- 7.5
-        # }
-        # connectedLay <- terra::buffer(x = vect(connected), width = RES)
-        # connectedLay[["Class"]] <- na.omit(unique(endLay[["Class"]]))
-        # Lay <- list(connectedLay)
-        connected <- vect(connected) # Added this when commented out above
-        connected[["Class"]] <- na.omit(unique(endLay[["Class"]]))
+        # Here I should go over each individual disturbance and connect it iteratively.
+        # This might eliminate the problem with so many lines at the same time very close to 
+        # each other. I probably need to:
+        # 1. Make a for loop over the number of lines, 
+        # 2. select just one feature at a time
+        oriLayVectSingle <- st_as_sf(oriLayVect)
+        # 3. use the st_connect on it
+        classEndLay <- na.omit(unique(endLay[["Class"]]))
+        for (i in 1:NROW(oriLayVectSingle)){
+          connectedOne <- nngeo::st_connect(oriLayVectSingle[i, ], 
+                                         sf::st_as_sf(endLay), 
+                                         ids = NULL, 
+                                         progress = TRUE)
+          # 4. Update the endLayer with the new connection
+          if (exists("connected")){
+            connected <- rbind(connected, vect(connectedOne))
+          } else {
+            connected <- vect(connectedOne)
+          }
+          endLay <- rbind(endLay, vect(connectedOne))
+        }
+        connected[["Class"]] <- classEndLay
         Lay <- list(connected)
         names(Lay) <- disturbanceEnd
         return(Lay)
