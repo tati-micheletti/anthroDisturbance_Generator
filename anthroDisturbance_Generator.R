@@ -26,8 +26,8 @@ defineModule(sim, list(
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
   reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
-                  "data.table", "PredictiveEcology/reproducible@development",
-                  "raster", "terra", "crayon", "msm", "rgdal", "sf", 
+                  "data.table", "PredictiveEcology/reproducible",
+                  "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
                   "fasterize", "stars", "nngeo", "tictoc"),
   parameters = rbind(
     #defineParameter("paramName", "paramClass", value, min, max, "parameter description"),
