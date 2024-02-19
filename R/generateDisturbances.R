@@ -4,23 +4,33 @@ generateDisturbances <- function(disturbanceParameters,
                                  studyArea,
                                  fires,
                                  currentTime,
+                                 growthStepGenerating,
                                  growthStepEnlargingPolys,
                                  growthStepEnlargingLines,
                                  currentDisturbanceLayer,
+                                 connectingBlockSize,
+                                 disturbanceRateRelatesToBufferedArea,
+                                 outputsFolder,
                                  runName){
 
   # Extracting layers from previous ones
   # Total study area
-  studyArea <- vect(studyArea)
-  studyArea <- project(x = studyArea, y = terra::crs(rasterToMatch))
+  rasterToMatchR <- raster::raster(rasterToMatch)
+  
+  if (!is(studyArea, "SpatVector"))
+    studyArea <- terra::vect(studyArea)
+    
+  studyArea <- terra::project(x = studyArea, y = terra::crs(rasterToMatch))
   uniStudyArea <- terra::aggregate(studyArea)
-  totalstudyAreaVAreaSqKm <- terra::expanse(uniStudyArea, unit = "km")
-  totalstudyAreaVAreaSqm <- terra::expanse(uniStudyArea, unit = "m")
+  totalstudyAreaVAreaSqKm <- terra::expanse(uniStudyArea, unit = "km", transform = FALSE)
+  totalstudyAreaVAreaSqm <- terra::expanse(uniStudyArea, unit = "m", transform = FALSE)
+  totNPix <- sum(rasterToMatch[], na.rm = TRUE)
+  calculatedPixelSizem2 <- totalstudyAreaVAreaSqm/totNPix # in m2
   
   # First, mask the current disturbances on the potential layer so we don't choose them again
   if (is.null(currentDisturbanceLayer)){
     message(paste0("currentDisturbanceLayer is NULL. This is likely the first year of the",
-                   " simulation. Creating current disturbed raster..."))
+                   " simulation. Creating current disturbed polygons..."))
     # Current layer is null, which indicates this might be the first year of the simulation. I
     # will need to create it then, based on the existing disturbances.
     # Get all current disturbances
@@ -30,40 +40,61 @@ generateDisturbances <- function(disturbanceParameters,
     # Combine all layers, both polygons and lines, separtely
     linesLays <- currDist[sapply(currDist, geomtype) == "lines"]
     polyLays <- currDist[sapply(currDist, geomtype) == "polygons"]
-    # Buffer lines at the resolution of the rasterToMatch to convert them to polys. 
-    # This is not the ideal resolution, but as we are NOT deriving the buffered disturbances 
-    # from this layer but just using it to avoid choosing pixels already chosen, then it should 
-    # be ok at 250m.  
+    # Buffer lines at the resolution of the rasterToMatch to convert them to polys.
+    # This is not the ideal resolution, but as we are NOT deriving the buffered disturbances
+    # from this layer but just using it to avoid choosing pixels already chosen, then it should
+    # be ok at 250m.
     # NOTE: We devide the res by 2 so the total around is exactly the resolution of a pixel,
-    # as the buffer uses the width on all sides. 
-    
-    #TODO Think this through on diagonals: Are these also captured?
-    # If not, we would need actually the half of the diagonal as buffer size, not side. 
-    # ~~~ IS THIS REALLY NEEDED ? ~~~ 
-    # (sqrt(2)*res(rasterToMatch)[1])/2
-    
+    # as the buffer uses the width on all sides.
+
     linesLays <- unlist(lapply(linesLays, function(X){
-      terra::buffer(x = X, width = res(rasterToMatch)[1]/2) 
-      # Here it needs to be the raster res, not the real one because we are not dealing with 
-      # real area to be calculated, but just the buffering to avoid specific pixels to be 
-      # selected 
+      terra::buffer(x = X, width = res(rasterToMatch)[1]/2)
+      # Here we need to buffer as this layer will be used to avoid specific pixels (i.e., already 
+      # disturbed!) to be selected for new disturbances.
     }))
     linesAndPolys <- do.call(what = c, list(polyLays, linesLays))
     names(linesAndPolys) <- NULL
     allLays <- do.call(rbind, linesAndPolys)
-    # Now fasterize all polys
-    allLaysSF <- sf::st_as_sf(x = allLays)
-    allLaysSF$Polys <- 1
-    polysField <- "Polys"
-    allLaysRas <- fasterize::fasterize(sf = st_collection_extract(allLaysSF, "POLYGON"),
-                                       raster = rasterToMatch, 
-                                       field = polysField)
   } else {
-    allLaysRas <- currentDisturbanceLayer
+    if (is(currentDisturbanceLayer, "RasterLayer"))
+      allLaysRas <- terra::rast(currentDisturbanceLayer) else
+        if (is(currentDisturbanceLayer, "SpatRaster")) 
+          allLaysRas <- currentDisturbanceLayer else {
+            curDistVcs <- unlist(currentDisturbanceLayer)
+            RES <- unique(disturbanceParameters[["resolutionVector"]])
+            curDistVcsAll <- lapply(names(curDistVcs), function(eachVectNm){
+              eachVect <- curDistVcs[[eachVectNm]]
+              if (length(eachVect) == 0) return(NULL)
+              message(paste0("Buffering and/or merging polygons for ", eachVectNm))
+              if (geomtype(eachVect) != "polygons"){
+                if (geomtype(eachVect) == "points"){
+                  buffVect <- terra::buffer(eachVect, width = RES/2)
+                } else {
+                  buffVect <- terra::buffer(eachVect, width = RES)
+                }
+              } else {
+                buffVect <- terra::aggregate(eachVect, dissolve = TRUE)
+              }
+              return(buffVect)
+            })
+            names(curDistVcsAll) <- NULL
+            allLays <- do.call(rbind, curDistVcsAll)
+          }
     # Create allLaysRas, which is the disturbance raster with all disturbances rasterized, with
-    # value == 1 for the disturbed pixels and non-disturbed pixels are NA
+    # value == 1 for the disturbed pixels. Non-disturbed pixels are NA
   }
+  # Now fasterize all polys
+  allLaysSF <- sf::st_as_sf(x = allLays)
+  allLaysSF$Polys <- 1
+  polysField <- "Polys"
+  message("Fasterizing disturbances...")
+  rasterToMatchR <- rasterToMatchR
+  allLaysRas <- fasterize::fasterize(sf = st_collection_extract(allLaysSF, "POLYGON"),
+                                     raster = rasterToMatchR, 
+                                     field = polysField)
+  allLaysRas <- rast(allLaysRas)
   
+
   # FIRST: Enlarging
   #############################################
   message(crayon::white("Enlarging disturbances..."))
@@ -94,93 +125,126 @@ generateDisturbances <- function(disturbanceParameters,
       # mentioned in disturbanceRate.
       # Detect current size: terra::expanse(Lay)
       # Calculate the total area to expand it: (currentSize*dParOri[["disturbanceRate"]])
-      # NOTE: The value from the table should already be in percent!!
+      # NOTE: The value from the table should be in percent because we divide it by 100 to get numeric
       # We need to assume a form for polygons and for lines.
       # Polygons: CIRCLE
       # Lines: RECTANGLES
       # Then we need the formula to calculate the buffer based on the increase in
       # area size (parameter from table) using a normal
       originalForm <- geomtype(Lay)
-      if (originalForm %in% c("lines", "points")){
-        # Check if we have the resolution
-        if ("resolutionVector" %in% dPar){
-          RES <- dPar[index, resolutionVector]/2
-        } else RES <- NULL
-        if (is.null(RES)){
-          message(crayon::red(paste0("resolutionVector in disturbanceParameters",
-                                     " table was not supplied for a lines file vector. Will ",
-                                     "default to 15m total (7.5m in each direction).",
-                                     "If this is not correct, please provide the ",
-                                     "resolution used for developing the layer ", ORIGIN,
-                                     " (", Sector,")")))
-          RES <- 7.5
+      if (!disturbanceRateRelatesToBufferedArea){
+        if (originalForm %in% c("lines", "points")){
+          # Check if we have the resolution
+          if ("resolutionVector" %in% dPar){
+            if (originalForm == "lines")
+              RES <- dPar[index, resolutionVector] else 
+                RES <- dPar[index, resolutionVector]/2
+          } else RES <- NULL
+          if (is.null(RES)){
+            message(crayon::red(paste0("resolutionVector in disturbanceParameters",
+                                       " table was not supplied for a lines file vector. Will ",
+                                       "default to 15m total (7.5m in each direction).",
+                                       " If this is not correct, please provide the ",
+                                       "resolution used for developing the layer ", ORIGIN,
+                                       " (", Sector,")")))
+            if (originalForm == "lines")
+              RES <- 15 else 
+                RES <- 7.5
+            
+          }
+          # NOTE: The buffer value is applied on all sides of the shapefile / line
+          # This means that a 15m buffer ends up being a 30 m increase in the line
+          # in all directions. If the original resolution was 15, then we need to divide it by 2,
+          # so we get in the end a TOTAL increase in of 15 m.
+          Lay <- terra::buffer(x = Lay, width = RES)
         }
-        # NOTE: The buffer value is applied on all sides of the shapefile / line
-        # This means that a 15m buffer ends up being a 30 m increase in the line
-        # in all directions. If the original resolution was 15, then we need to divide it by 2,
-        # so we get in the end a TOTAL increase in of 15 m.
-        Lay <- terra::buffer(x = Lay, RES)
+        currArea <- terra::expanse(Lay, unit = "m", transform = FALSE)
+      } else { # If the disturbanceRate Relates To Buffered Area (i.e., caribou-wise)
+        # It doesn't matter if poly or lines or points, if buffered, is buffered to 500m
+          LayBuff <- terra::buffer(Lay, width = 500) # Need to aggregate to avoid double counting!
+          LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
+          currArea <- terra::expanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
+        if (disturbanceRateRelatesToBufferedArea) 
+          message(paste0("Buffered (500m) area for ", Sector, 
+                       " -- ", ORIGIN, ": ", round(currArea/1000000, 2), " Km2"))
+        message(paste0("Percentage of current area: ", round(100*((currArea/1000000)/totalstudyAreaVAreaSqKm), 3), "%."))
       }
-        currArea <- terra::expanse(Lay, unit = "m")
-        # The dParOri[["disturbanceRate"]] (or disturbRate) is (by default) the calculated difference between
+      # The dParOri[["disturbanceRate"]] (or disturbRate) is (by default) the calculated difference between
         # the 2010 and 2015 disturbance divided by the total amount of years, over the entire area
         # Therefore, it refers to the total study area size. 
         disturbRate <- dParOri[["disturbanceRate"]]
+        #Convert Rate into numeric (i.e. 0.2% = 0.002)
+        Rate <- disturbRate/100
         # Disturbance area to add to current:
-        disturbAreaSqKm <- disturbRate*totalstudyAreaVAreaSqKm
+        if (Rate == 0){
+          message(paste0("Rate of disturbance for ", ORIGIN, " is 0. This is either a disturbance ",
+                         "that did not (or should not) change, or a disturbance that was reduced through ",
+                         "time in the study area. Disturbance reduction has not yet been implemented.",
+                         " Returning the layer unchanged."))
+          return(Lay)
+        }
+        disturbAreaSqKm <- Rate*totalstudyAreaVAreaSqKm*dParOri[["disturbanceInterval"]]
         # Total increase in area to be distributed across all disturbances:
-        disturbAreaSqM <- disturbAreaSqKm * 1000000
-        # What is the % to growth for each disturbance:
-        totalCurrDistArea <- sum(currArea)
-        totalPercGrowth <- disturbAreaSqM/totalCurrDistArea
-        
+        disturbAreaSqM <- disturbAreaSqKm * 1000000 # expected EXTRA disturbed area in sqm 
+        # (i.e., how much 0.2% of disturbance over the entire area actually represents)
+        # Now calculate how much I actually expect the area to be disturbed (i.e., total future 
+        # disturbed area = current disturbed area + extra disturbed area)
+        expectedTotalDisturbedArea <- currArea + disturbAreaSqM
         # We will do the buffer iteratively as there are no great solutions for getting the correct 
         # value by calculations because the polygon's forms is not known.
-        # While totalPercGrowthAchieved is below totalPercGrowth, we will keep increasing the 
+        # While totalDisturbedAreaAchieved is below expectedTotalDisturbedArea, we will keep increasing the 
         # buffer value and recalculating it. Past trials are first below:
         
-        totalPercGrowthAchieved <- 0
+        totalDisturbedAreaAchieved <- 0
         expandTo <- 0
         iter <- 1
         tictoc::tic("Total elapsed time for calculating disturbance percentage: ")
-        while (totalPercGrowthAchieved < totalPercGrowth) {
-          if (iter == 1)
-            message(paste0("Calculating disturbance percentage for ",
-                           ORIGIN, " (iteration ", iter,")"))
-          if (iter %% 100 == 0) {
-            message(paste0("Calculating disturbance percentage for ",
-                         ORIGIN, " (iteration ", iter,")"))
+        while (totalDisturbedAreaAchieved < expectedTotalDisturbedArea) {
+          if (iter %in% 1:10){ 
+            message(paste0("Calculating total enlarging disturbance size for ", Sector, " for ",  
+                           ORIGIN, " (Year ", currentTime,"; iteration ", iter,")"))
+          }
+          if (iter %% 50 == 0) {
+            message(paste0("Calculating total enlarging disturbance size for ", Sector, " for ",  
+                           ORIGIN, " (Year ", currentTime,"; iteration ", iter,")"))
           }
           if (originalForm %in% c("lines", "points")){
             expandTo <- expandTo + growthStepEnlargingLines
           } else {
             expandTo <- expandTo + growthStepEnlargingPolys 
           }
+          # Expand the area
           LayUpdated <- terra::buffer(x = Lay, width = expandTo)
-          totalCurrDistArea <- sum(currArea)
-          futureArea <- terra::expanse(LayUpdated, unit = "m")
-          totalFutureDistArea <- sum(futureArea)
-          totalPercGrowthAchieved <- (totalFutureDistArea-totalCurrDistArea)/totalCurrDistArea
-          iter <- iter + 1 
+          # Calculate new total disturbed area
+          if (disturbanceRateRelatesToBufferedArea){
+            LayUpdatedBuff <- terra::buffer(x = LayUpdated, width = 500)
+            futureAreaAgg <- terra::aggregate(LayUpdatedBuff)
+            futureArea <- terra::expanse(futureAreaAgg, unit = "m", transform = FALSE)
+          } else {
+            futureArea <- terra::expanse(LayUpdated, unit = "m", transform = FALSE)
+          }
+          totalDisturbedAreaAchieved <- sum(futureArea)
+          iter <- iter + 1
         }
         tictoc::toc()
         
-        cat(crayon::yellow(paste0("Percentage difference between mean disturbance rate",
-                                  " and mean change in total area for sector ",
-                                  crayon::red(Sector), " disturbance type ", crayon::red(ORIGIN), ": \n",
-                                  crayon::red(format(100*round((totalPercGrowthAchieved - 
-                                                                    totalPercGrowth)/totalPercGrowth, 4), 
-                                                       scientific = FALSE), " %."),
-                                  "\nThis value can help interpret how close the increased areas ",
-                                  "are to the expected increases. The ideal value is 0.\n")))
-        
+        message(paste0("Percentage of disturbed future area after buffer: ", 
+                       round(100*(totalDisturbedAreaAchieved/totalstudyAreaVAreaSqm), 3), "%."))
+
+        cat(crayon::yellow(paste0("Difference between expected and achieved change for ",
+                                  crayon::red(Sector), " -- ", crayon::red(ORIGIN), ": ",
+                                  crayon::red(format(100*round((totalDisturbedAreaAchieved - 
+                                                                  expectedTotalDisturbedArea)/expectedTotalDisturbedArea, 4), 
+                                                       scientific = FALSE), " % (ideal value = 0)."),
+                                  "\nDisturbance achieved: ", round(totalDisturbedAreaAchieved/1000000,3),
+                                  " km2 -- Disturbance expected: ", round(expectedTotalDisturbedArea/1000000,3), " km2")))
         cat(paste0(Sector, 
                    " ", 
                    ORIGIN, 
                    " ",
                    currentTime,
                    " ",
-                   format(100*round((totalPercGrowthAchieved - totalPercGrowth)/totalPercGrowth, 8), 
+                   format(100*round((totalDisturbedAreaAchieved - expectedTotalDisturbedArea)/expectedTotalDisturbedArea, 8), 
                           scientific = FALSE)),
             file = file.path(Paths[["outputPath"]], paste0("PercentageDisturbances_", currentTime, 
                                                            "_", runName, ".txt")),
@@ -205,6 +269,7 @@ generateDisturbances <- function(disturbanceParameters,
       browser()
     } # Bug Catch
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
+
       dParOri <- dPar[dataName == Sector & disturbanceOrigin == ORIGIN,]
       Lay <- disturbanceList[[Sector]][[ORIGIN]]
       if (is.null(Lay)) {
@@ -220,15 +285,22 @@ generateDisturbances <- function(disturbanceParameters,
        
       # 1. Get the potential layer
       potLay <- disturbanceList[[Sector]][[dParOri[["dataClass"]]]]
-      
+      if (length(potLay) == 0){# In case the cropped area doens't have anything
+        message(paste0("The potential area for ", Sector, " class ", ORIGIN, " is NULL.",
+                       " Likely cropped out from studyArea. Returning NULL."))
+        return(NULL)
+      } 
+      # Previous pixel strategy for Generating Disturbances
       # 2. Fasterize it
       potLaySF <- sf::st_as_sf(x = potLay)
       potField <- dParOri[["potentialField"]]
       
       if (any(is.na(potField), 
               potField == "",
-              is.null(potField))){ # If NA, it doesn't matter, but need to create a 
+              is.null(potField))){ 
+        # If NA, it doesn't matter, but need to create a 
         # field so not the whole thing becomes one big 1 map
+        
         potLaySF$Potential <- 1
         potField <- "Potential"
         message(crayon::yellow(paste0("Potential field not declared for ", ORIGIN, " (",
@@ -238,15 +310,15 @@ generateDisturbances <- function(disturbanceParameters,
       
       # Update with fire layer if forestry
       if (Sector == "forestry"){
-
+        
         message(paste0("Generating disturbance for forestry. Updating potential layer for ",
-                       "occurred fires and currently productive forest"))
+                       "occurred fires and currently productive forest for year ", currentTime))
         
         # First: Select only productive forests
         # potLaySF <- potLaySF[potLaySF$ORIGIN < (currentTime - 50), ] # For some weird reason, this doesn't work anymore... sigh.
         potLaySF <- subset(potLaySF, potLaySF$ORIGIN < (currentTime - 50))
         potLayF <- fasterize::fasterize(sf = st_collection_extract(potLaySF, "POLYGON"),
-                                        raster = rasterToMatch, field = potField)
+                                        raster = rasterToMatchR, field = potField)
         # Second: remove fires
         if (!is.null(fires))
           potLayF[fires[] == 1] <- NA
@@ -262,61 +334,218 @@ generateDisturbances <- function(disturbanceParameters,
         # distRas2[is.na(potLayF)] <- NA
       } else {
         potLayF <- fasterize::fasterize(sf = st_collection_extract(potLaySF, "POLYGON"),
-                                        raster = rasterToMatch, field = potField)
+                                        raster = rasterToMatchR, field = potField)
       }
-      
-      # 3. Check how many pixels we need to choose, and in which sizes based on the table
-      Rate <- dParOri[["disturbanceRate"]]
-      totNPix <- sum(rasterToMatch[], na.rm = TRUE)
+
+      # Get the disturbance rate
+      disturbRate <- dParOri[["disturbanceRate"]]
+      #Convert Rate into numeric (i.e. 0.2% = 0.002)
+      Rate <- disturbRate/100
       # Here we multiply the rate by the total number of pixels by the interval we are using to 
       # generate the disturbances (as rate is passed as yearly rate!), to know how many pixels we 
       # are expected to disturb in the given interval for this study area, given the rate applied
-      expectedDistPixels <- Rate*totNPix*dParOri[["disturbanceInterval"]]
+      if (Rate == 0){
+        message(paste0("Rate of disturbance for ", ORIGIN, " is 0. This is either a disturbance ",
+                       "that did not (or should not) change, or a disturbance that was reduced through ",
+                       "time in the study area. Disturbance reduction has not yet been implemented.",
+                       " Returning the layer unchanged."))
+        newDistLay <- copy(rasterToMatch)
+        names(newDistLay) <- ORIGIN
+        newDistLay[newDistLay == 1] <- 0
+        return(newDistLay)
+      }
+      # Ideally, I would do pixels here. However, because a lot of the disturbances are smaller than 
+      # 1 pixel (6.25 ha), doing with vectors is better.
+      
+      expectedDistPixels <- Rate*totNPix*dParOri[["disturbanceInterval"]] # The disturbance expected here 
+      # is already considering the buffer if disturbanceRateRelatesToBufferedArea, or the not buffered if
+      # the parameter is FALSE
+      
+      # Before I do the iterations I wanna know what is the currently disturbed area for this specific disturbance type
+      if (all(!is.null(Lay),
+              disturbanceRateRelatesToBufferedArea)){
+        if (is(Lay, "RasterLayer"))
+          Lay <- rast(Lay)
+        if (is(Lay, "SpatRaster")){ # Need to convert to polygon for area
+          Lay[Lay == 0] <- NA # Otherwise buffers weird places!
+          Lay <- terra::as.polygons(Lay)
+        }
+        LayBuff <- terra::buffer(Lay, width = 500) # Need to aggregate to avoid double counting!
+        LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
+        currArea <- terra::expanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
+        if (length(currArea) == 0){
+          message(paste0("No disturbance for ", Sector, 
+                         " -- ", ORIGIN, ": currentArea = 0 Km2"))
+        } else {
+          message(paste0("Buffered (500m) area for ", Sector, 
+                         " -- ", ORIGIN, ": ", round(currArea/1000000, 2), " Km2"))
+          message(paste0("Percentage of current area: ", round(100*((currArea/1000000)/totalstudyAreaVAreaSqKm), 3), "%."))
+        }
+      }
+      
       if (expectedDistPixels < 1){
         # If the number of expected pixels for that given year is smaller than 1, then we need to
         # apply a probability of that disturbance happening. 
-        message(crayon::red("The number of expected disturbed pixels for step ", 
+        message(crayon::red("The number of expected disturbed pixels for ", ORIGIN," for step ", 
                             currentTime, " is less than 1. The function will apply a probability ",
-                            "of this disturbance happening, with the given size expected."))
-        totPixToChoose <- rbinom(1, 1, expectedDistPixels)
+                            "of this disturbance happening, with the given expected size."))
+        expectedDistPixelsProb <- if (disturbanceRateRelatesToBufferedArea) (1/8)*expectedDistPixels else 
+          expectedDistPixels # As the disturbance needs to be buffered, we need to reduce the probability by 1/8 (total buffer of 1 pixel)
+        totPixToChoose <- rbinom(1, 1, expectedDistPixelsProb)
+        if (totPixToChoose == 0){
+          message(paste0("Rate of disturbance for ", ORIGIN, " is very small and the probability of ",
+                         "this disturbance happening returned 0.",
+                         " Returning layer without disturbances."))
+          newDistLay <- copy(rasterToMatch)
+          names(newDistLay) <- ORIGIN
+          newDistLay[newDistLay == 1] <- 0
+          return(newDistLay)
+        }
+        nPixChosenTotal <- totPixToChoose
       } else {
         nPixChosenTotal <- 0
         chosenDistrib <- numeric()
         IT <- 1
         while (round(nPixChosenTotal, 0) < round(expectedDistPixels, 0)){
-          if (IT == 1){
-            print(paste0("Calculating total disturbance size for ", 
-                         ORIGIN, " (iteration ", IT, ", ", 
-                         round(100*(round(nPixChosenTotal, 0)/round(expectedDistPixels, 0)), 2),"% achieved)"))
+          if (IT %in% 1:10){
+            message(paste0("Calculating total generated disturbance size for ", Sector, " for ", 
+                           ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
+                           round(100*(round(nPixChosenTotal, 0)/round(expectedDistPixels, 0)), 2),"% achieved)"))
           }
           if (IT %% 10 == 0){
-            print(paste0("Calculating total disturbance size for ", 
-                         ORIGIN, " (iteration ", IT, ", ", 
-                         round(100*(round(nPixChosenTotal, 0)/round(expectedDistPixels, 0)), 2),"% achieved)"))
+            message(paste0("Calculating total generated disturbance size for ", Sector, " for ",  
+                           ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
+                           round(100*(round(nPixChosenTotal, 0)/round(expectedDistPixels, 0)), 2),"% achieved)"))
           }
           # This is the size in meter square that each disturbance should have
           Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
-          # This is the size as the number of pixels to be chosen
-          # This below doesn't work well as the resolution doesn't account for the geodesic form of 
-          # the planet:
-          # nPixChosen <- round(sqrt(Size)/res(rasterToMatch)[1], 0)
-           
-          # This solution accounts more or less for this!
+          # Here I generate one disturbance at a time. 
+          # This is the size as the number of pixels to be chosen IN m2!
           # totNPix is the number of pixels that correspont to totalstudyAreaVAreaSqKm
           # As the calculation based on pixel resolution is not good, we can try a better approximation
           # by using the study area shapefile calculated with terra. It is not the best as southern pixels
           # are in reality smaller than the northern ones, but it is a good approximation for now: 
-          calculatedPixelSizem2 <- totalstudyAreaVAreaSqm/totNPix # in m2
           calculatedPixelSizeLength <- sqrt(calculatedPixelSizem2)
-          # Here I am getting the size of the 
+          # sqrt(Size) needs to be at least the same as calculatedPixelSizeLength (or better, 
+          # Size at least calculatedPixelSizeLength^2 == at least 1 pixel), otherwise we have 0 pixels selected
           nPixChosen <- round(sqrt(Size)/calculatedPixelSizeLength, 0)
-          nPixChosenTotal <- nPixChosenTotal + nPixChosen
+          if (nPixChosen == 0)
+            nPixChosen <- 1
+          # TODO Improve/simplify this. I might already here have either 1 or more.
+          if (Size < calculatedPixelSizem2){
+            # This means that, if I have a 0, I need to force it to 1. This is because even if we had 
+            # everything as vector, we would still have one pixel when rasterizing, even if the 
+            # disturbance is really small.
+            if (disturbanceRateRelatesToBufferedArea){ # Size smaller than a pixel and buffered!
+              # browser() # Implement the speeding up here
+              # if (expectedDistPixels > (nPixChosen * growthStepGenerating)) # Trying to make things run faster when they can
+              #   nPixChosen <- nPixChosen * growthStepGenerating
+              
+              # 1. Create a raster with the same resolution than RTM
+              nrowscols <- 100*nPixChosen
+              # Make sure the raster is more or less in the same region as we are,
+              # so use the ymax and xmax of rasterToMatch to guide the extent
+              tmpRas <- rast(ncols = nrowscols,
+                             nrows = nrowscols,
+                             res = terra::res(rasterToMatch),
+                             extent = c(xmax(rasterToMatch)-(res(rasterToMatch)*nrowscols)[1], 
+                                        xmax(rasterToMatch),
+                                        ymax(rasterToMatch)-(res(rasterToMatch)*nrowscols)[1], 
+                                        ymax(rasterToMatch)), # xmin, xmax, ymin, ymax
+                             crs = terra::crs(rasterToMatch),
+                             vals = NA)
+              # 2. Get the pixToChoose in the middle of the raster
+              middlePoint <- getRasterMiddlePoint(tmpRas)
+              # This means that we have to randomly choose the nearest 8 pixel neighbors
+              adjCels <- c(middlePoint,
+                           sample(x = terra::adjacent(tmpRas, cells = middlePoint, 
+                                                      directions = 8, include = FALSE), 
+                                  size = (nPixChosen - 1),
+                                  replace = FALSE))
+              # Place the chosen pixels in the raster
+              tmpRas[adjCels] <- 1
+              # 3. Buffer it using terra buffer by 500m (background = NA)
+              bufferedTmpRas <- terra::buffer(tmpRas,
+                                              width = 500, background = -1)
+              bufferedTmpRas[bufferedTmpRas == -1] <- NA
+              # 4. Get how many pixels became 1's, this is my 
+              nPixChosenBuff <- sum(bufferedTmpRas[], na.rm = TRUE)
+              #TODO Implement growthStepGenerating when buffering...
+              # if (expectedDistPixels > (nPixChosenBuff * growthStepGenerating)) # Trying to make things run faster when they can
+              #   nPixChosen <- nPixChosen * growthStepGenerating  
+              nPixChosenTotal <- nPixChosenTotal + nPixChosen + nPixChosenBuff
+              
+            } else { # Size smaller than a pixel, and NOT buffered
+              # Similarly, Size needs to be at least 1 pixel for non-disturbanceRateRelatesToBufferedArea.
+              if (expectedDistPixels > (nPixChosen * growthStepGenerating)) # Trying to make things run faster when they can
+                nPixChosen <- nPixChosen * growthStepGenerating
+              nPixChosenTotal <- nPixChosenTotal + nPixChosen
+            }
+          } else { 
+           # Here I am getting the size of the disturbance if Size is bigger than a pixel
+          if (disturbanceRateRelatesToBufferedArea){ # Size bigger than a pixel and buffered
+            # browser() # Implement the speeding up here
+            # if (expectedDistPixels > (nPixChosen * growthStepGenerating)) # Trying to make things run faster when they can
+            #   nPixChosen <- nPixChosen * growthStepGenerating
+               
+            # 1. Create a raster with the same resolution than RTM
+            nrowscols <- 100*nPixChosen
+            # Make sure the raster is more or less in the same region as we are,
+            # so use the ymax and xmax of rasterToMatch to guide the extent
+            tmpRas <- rast(ncols = nrowscols,
+                           nrows = nrowscols,
+                           res = res(rasterToMatch),
+                           extent = c(xmax(rasterToMatch)-(res(rasterToMatch)*nrowscols)[1], 
+                                      xmax(rasterToMatch),
+                                      ymax(rasterToMatch)-(res(rasterToMatch)*nrowscols)[1], 
+                                      ymax(rasterToMatch)), # xmin, xmax, ymin, ymax
+                           crs = terra::crs(rasterToMatch),
+                           vals = NA)
+            # 2. Get the pixToChoose in the middle of the raster
+            middlePoint <- getRasterMiddlePoint(tmpRas)
+            if (nPixChosen < 10){
+             # This means that we have to randomly choose the nearest 8 pixel neighbors
+              adjCels <- c(middlePoint,
+                           sample(x = terra::adjacent(tmpRas, cells = middlePoint, 
+                                         directions = 8, include = FALSE), 
+                                  size = (nPixChosen - 1),
+                                  replace = FALSE))
+            } else {
+              chosenPix <- middlePoint
+              while (length(chosenPix) < nPixChosen){
+                adjCels <- terra::adjacent(tmpRas, cells = chosenPix,
+                                           directions = 8, 
+                                           include = FALSE)
+                chosenPix <- c(chosenPix, adjCels)
+              }
+              adjCels <- chosenPix[1:nPixChosen]
+            }
+            # Place the chosen pixels in the raster
+            tmpRas[adjCels] <- 1
+            # 3. Buffer it using terra buffer by 500m (background = NA)
+            bufferedTmpRas <- terra::buffer(tmpRas,
+                                            width = 500, background = -1)
+            bufferedTmpRas[bufferedTmpRas == -1] <- NA
+            # 4. Get how many pixels became 1's, this is my 
+            nPixChosenBuff <- sum(bufferedTmpRas[], na.rm = TRUE)
+            #TODO Implement growthStepGenerating when buffering...
+            # if (expectedDistPixels > (nPixChosenBuff * growthStepGenerating)) # Trying to make things run faster when they can
+            #   nPixChosen <- nPixChosen * growthStepGenerating  
+            nPixChosenTotal <- nPixChosenTotal + nPixChosen + nPixChosenBuff
+            } else {# Size bigger than a pixel and NOT buffered
+            if (expectedDistPixels > (nPixChosen * growthStepGenerating)) # Trying to make things run faster when they can
+              nPixChosen <- nPixChosen * growthStepGenerating
+            nPixChosenTotal <- nPixChosenTotal + nPixChosen
+          }
+          }
           chosenDistrib <- c(chosenDistrib, nPixChosen)
           IT <- IT + 1
         }
-        message(paste0("Disturbance size successfully calculated for ", ORIGIN))
+        # TODO We could here implement code to choose which iteration had less 
+        # difference (i.e., past or current)
         totPixToChoose <- chosenDistrib[chosenDistrib > 0] # Need to clean up as sometimes we
-        # get zero pixels if the size of each disturbance is not too big
+        # get zero pixels if the size of each disturbance is not too big 
+        # [UPDATE: This shouldn't happen anymore with the changes in the code]
       }
       # 4. Select which pixels are the most suitable and then get the number of neighbors based on 
       # the needed sizes
@@ -327,6 +556,11 @@ generateDisturbances <- function(disturbanceParameters,
       potentialDT <- na.omit(data.table(pixelID = 1:ncell(potLayF),
                                 vals = terra::values(potLayF)))
       # Third, subset the best pixels
+      if (max(unique(potentialDT[["vals"]])) %in% c(-Inf, Inf)){
+        message(paste0("max(unique(potentialDT[['vals']])) is ", max(unique(potentialDT[["vals"]])), 
+                       ". Please debug."))
+        browser()
+      }
       bestPotential <- potentialDT[vals == max(unique(potentialDT[["vals"]])), pixelID]
       # Then, randomly, choose the pixels. Here need to pay attention to choose one per "development"
       # and only then use the adjacent to get to the correct sizes.
@@ -370,14 +604,14 @@ generateDisturbances <- function(disturbanceParameters,
         # Create an adjacent matrix
         # The distance depends on how many pixels I need
         whichAdj <- unique(howManyAdj)
+        print("Doing focal weight...")
         nbMatrices <- lapply(whichAdj, function(X){
-          m <- focalWeight(x = rasterToMatch, d = X * res(rasterToMatch)[1], 
+          m <- focalWeight(x = rasterToMatchR, d = X * res(rasterToMatch)[1], 
                       type = c('circle'))
           m[m > 0] <- 1
           return(m)
         })
         names(nbMatrices) <- paste0("NB_", whichAdj)
-        print(ORIGIN)  
         allPixAdj <- sapply(whichAdj, function(totAdj){
           pix <- pixNeedAdj[which(howManyAdj == totAdj)]
           adjN <- totAdj - 1  # We need to exclude the focal cell
@@ -388,7 +622,7 @@ generateDisturbances <- function(disturbanceParameters,
           # adjacent and ignored.
           nb[nb == 0] <- -1
           nb[ceiling(ncol(nb)/2), ceiling(nrow(nb)/2)] <- 0
-          Adj <- as.data.table(raster::adjacent(x = rasterToMatch, cells = pix,
+          Adj <- as.data.table(raster::adjacent(x = rasterToMatchR, cells = pix,
                                   directions = nb, pairs = TRUE,
                                   include = FALSE, id = TRUE))
           # Now we sample the number of adjacents needed from the whole table, by ID (each pix that 
@@ -404,26 +638,46 @@ generateDisturbances <- function(disturbanceParameters,
       # Now, we make a new disturbance layer. We need to keep track of the 
       # old one because we need to connect the new stuff. We can use RTM as a template.
       newDistLay <- copy(rasterToMatch)
-      newDistLay[] <- newDistLay[]
       names(newDistLay) <- ORIGIN
       newDistLay[newDistLay == 1] <- 0
       newDistLay[whichPixelsChosen] <- 1
-      cat(crayon::yellow(paste0("Percentage difference between mean disturbance rate",
-                                " and mean change in total area for sector ",
-                                crayon::red(Sector), " disturbance type ", crayon::red(ORIGIN), ": \n",
-                                crayon::red(format(100*round((length(whichPixelsChosen) - 
-                                                                expectedDistPixels)/expectedDistPixels, 4), 
-                                                   scientific = FALSE), " %."),
-                                "\nThis value can help interpret how close the increased areas ",
-                                "are to the expected increases. The ideal value is 0.\n")))
+      if (disturbanceRateRelatesToBufferedArea){ 
+        # Because of the projection problem described below,
+        # this whole section is a moot point. Using instead what was previously calculated.
+        # Because of where this is (NT), the buffering below results in errors of distance.
+        # TODO To fix this, I would need to implement a final buffering (i.e., when we want to 
+        # buffer all disturbances for caribou) system using moving windows somehow. This would remove 
+        # the effects of earth projection distortions.
+        
+        # If disturbanceRateRelatesToBufferedArea, we need to recalculate the total pixels!
+        # newDistLayBuff <- newDistLay
+        # newDistLayBuff[newDistLayBuff == 0] <- NA
+        # newDistLayBuff2 <- terra::buffer(newDistLayBuff, width = 500, background = -1)
+        # newDistLayBuff2[newDistLayBuff2 == -1] <- NA
+        # howManyPixelsChosenBuff <- sum(newDistLayBuff2[], na.rm = TRUE)
+        # totPixBuff <- sum(length(whichPixelsChosen), howManyPixelsChosenBuff)
+        totPixBuff <- nPixChosenTotal
+        calcPerc <- (totPixBuff - expectedDistPixels)/expectedDistPixels
+      } else {
+        calcPerc <- (length(whichPixelsChosen) - expectedDistPixels)/expectedDistPixels
+      }
+      
+      message(paste0("Percentage of disturbed future area after buffer: ",
+                     round(100*((totPixBuff*calculatedPixelSizem2)/totalstudyAreaVAreaSqm), 3), "%."))
+       
+      cat(crayon::yellow(paste0("Difference between expected and achieved change for ",
+                                crayon::red(Sector), " -- ", crayon::red(ORIGIN), ": ",
+                                crayon::red(format(100*round(calcPerc, 4), 
+                                                   scientific = FALSE), " % (ideal value = 0)."),
+                                "\nDisturbance achieved: ", round((totPixBuff*calculatedPixelSizem2)/1000000,3),
+                                " km2 -- Disturbance expected: ", round((expectedDistPixels*calculatedPixelSizem2)/1000000,3), " km2")))
       cat(paste0(Sector, 
                  " ", 
                  ORIGIN, 
                  " ",
                  currentTime,
                  " ",
-                 format(100*round((length(whichPixelsChosen) - 
-                                     expectedDistPixels)/expectedDistPixels, 8), 
+                 format(100*round(calcPerc, 8), 
                         scientific = FALSE)),
           file = file.path(Paths[["outputPath"]], paste0("PercentageDisturbances_", currentTime, 
                                                          "_", runName, ".txt")),
@@ -446,8 +700,7 @@ generateDisturbances <- function(disturbanceParameters,
     disturbanceOrigin <- dPar[index, disturbanceOrigin]
     disturbanceEnd <- dPar[index, disturbanceEnd]
       # 1. Get the info on which layer to connect to which layer
-      # 2. Get the origin layer (from Generated)
-        oriLay <- Generated[[Sector]][[disturbanceOrigin]]
+    oriLay <- Generated[[Sector]][[disturbanceOrigin]]
         if (is.null(oriLay)) {
           # Find alternative dataName for roads
           foundSectors <- unique(dPar[disturbanceOrigin == dPar[index, disturbanceOrigin], dataName])
@@ -464,8 +717,11 @@ generateDisturbances <- function(disturbanceParameters,
               oriLay <- Generated[["forestry"]][[disturbanceOrigin]]
               }
               if (is.null(oriLay)){
-                stop(paste0("The disturbance origin layer (", Sector," for ", disturbanceOrigin,
-                          ") couldn't be found in the disturbanceList. Please debug"))
+                warning(paste0("The disturbance origin layer (", Sector," for ", disturbanceOrigin,
+                          ") couldn't be found in the disturbanceList. It is possible that the",
+                          " disturbance is not available in the study area. Returning NULL."), 
+                        immediate. = TRUE)
+                return(NULL)
                 }
               } # Bug catch for mismatches between disturbanceOrigin and the layers
           }
@@ -487,42 +743,120 @@ generateDisturbances <- function(disturbanceParameters,
           if (is.null(endLay)){
             endLay <- Generated[[disturbanceOrigin]][[disturbanceOrigin]]
             if (is.null(endLay)){
-              stop(paste0("The disturbance end layer (", Sector," for ", disturbanceOrigin,
-                          ") couldn't be found in the disturbanceList. Please debug"))
+              warning(paste0("The disturbance end layer (", Sector," for ", disturbanceOrigin,
+                          ") couldn't be found in the disturbanceList.  It is possible that the",
+                          " disturbance is not available in the study area. Returning NULL."), 
+                      immediate. = TRUE)
+              return(NULL)
             }
           } # Bug catch for mismatches between disturbanceOrigin and the layers
         }
+        if (!is(oriLay, "SpatRaster"))
           oriLay <- rast(oriLay) # Using terra is faster
         # 4. Merge the layers and then connect the features
         # 4.1. Convert the raster to poly
         # Need to convert all that is zero into NA otherwise 2 polygons are created (one for 
         # 0's and one for 1's):
+        
         oriLay[oriLay != 1] <- NA
-        oriLayVect <- as.polygons(oriLay, dissolve = FALSE)
+        oriLayVect <- terra::as.polygons(oriLay)
+        if (NROW(oriLayVect) == 0){
+          # If the disturbance doesn't exist, we need to return NULL
+          return(NULL)
+        }
         # Here I should go over each individual disturbance and connect it iteratively.
         # This might eliminate the problem with so many lines at the same time very close to 
         # each other. I probably need to:
         # 1. Make a for loop over the number of lines, 
         # 2. select just one feature at a time
-        oriLayVectSingle <- st_as_sf(oriLayVect)
-        # 3. use the st_connect on it
-        classEndLay <- na.omit(unique(endLay[["Class"]]))
-        for (i in 1:NROW(oriLayVectSingle)){
-          connectedOne <- nngeo::st_connect(oriLayVectSingle[i, ], 
-                                         sf::st_as_sf(endLay), 
-                                         ids = NULL, 
-                                         progress = TRUE)
-          # 4. Update the endLayer with the new connection
-          if (exists("connected")){
-            connected <- rbind(connected, vect(connectedOne))
-          } else {
-            connected <- vect(connectedOne)
+        # oriLayVectSingle <- st_as_sf(oriLayVect) # For sf and st_connect. 
+        # 3. use the st_connect or terra::nearest on it # Changed to terra's native nearest. Much faster!
+        classEndLay <- na.omit(unique(endLay[["Class"]])) 
+        if (all(!is.null(connectingBlockSize),
+                NROW(oriLayVect) > connectingBlockSize)){
+          message(paste0("connectingBlockSize is not NULL and connecting layer has ", 
+                         NROW(oriLayVect), " rows. Applying blocking technique to speed up",
+                         "disturbance generation type connecting. ",
+                         " If too many lines are connecting from the same place, decrease the",
+                         "connectingBlockSize or ",
+                         "set it to NULL, which will improve final result, but needs considerable",
+                         "more time to run."))
+          blockFullList <- 1:NROW(oriLayVect)
+          amountBlocks <- ceiling(NROW(oriLayVect)/connectingBlockSize)
+          blockList <- list()
+          for (i in 1:amountBlocks) {
+            if (length(blockFullList) <= connectingBlockSize){
+              blockList[[i]] <- blockFullList
+            } else {
+              blockList[[i]] <- sample(x = blockFullList, 
+                                       size = connectingBlockSize, replace = FALSE)
+              # Update the list
+              blockFullList <- setdiff(blockFullList, blockList[[i]])
+            }
           }
-          endLay <- rbind(endLay, vect(connectedOne))
-        }
+          names(blockList) <- paste0("block_", 1:amountBlocks)
+          for (i in names(blockList)){
+            whichVecs <- blockList[[i]]
+            message(paste0("Connecting ", unique(names(oriLayVect))," for year ", currentTime,
+                           ": ", i ," of ", length(blockList),
+                           " (", 100*round(length(whichVecs)/NROW(oriLayVect),3),"%)"))
+            connectedOne <- terra::nearest(oriLayVect[whichVecs, ], endLay, 
+                                           pairs = FALSE, 
+                                           centroids = TRUE, 
+                                           lines = TRUE)
+            # 4. Update the endLayer with the new connection
+            if (!is(connectedOne, "SpatVector"))
+              connectedOne <- terra::vect(connectedOne)
+            if (exists("connected")){
+              connected <- rbind(connected, connectedOne)
+            } else {
+              connected <- connectedOne
+            }
+            endLay <- rbind(endLay, connectedOne)
+          }          
+        } else {
+          # message(paste0("connectingBlockSize is ", 
+          #                ifelse(is.null(connectingBlockSize), "NULL", connectingBlockSize),
+          #                " and connecting layer has ", NROW(oriLayVect),
+          #                " rows. NOT applying blocking technique for disturbance generation type ",
+          #                "connecting for ", Sector," -- ", disturbanceOrigin, ". If taking too long, ",
+          #                "please provide connectingBlockSize as a higher number than ", 
+          #                ifelse(is.null(connectingBlockSize), "1", connectingBlockSize)))
+          for (i in 1:NROW(oriLayVect)){
+            if(i%%100==0)
+              message(paste0("Connecting ", unique(names(oriLayVect))," for year ", currentTime,
+                           ": ", i ," of ", NROW(oriLayVect),
+                           " (", 100*round(i/NROW(oriLayVect),4),"%)"))
+            connectedOne <- terra::nearest(oriLayVect[i, ], endLay, 
+                                           pairs = FALSE, 
+                                           centroids = TRUE, 
+                                           lines = TRUE)
+            # 4. Update the endLayer with the new connection
+            if (!is(connectedOne, "SpatVector"))
+              connectedOne <- terra::vect(connectedOne)
+            if (exists("connected")){
+              connected <- rbind(connected, connectedOne)
+            } else {
+              connected <- connectedOne
+            }
+            endLay <- rbind(endLay, connectedOne)
+          }
+        } 
         connected[["Class"]] <- classEndLay
         Lay <- list(connected)
         names(Lay) <- disturbanceEnd
+        if (disturbanceRateRelatesToBufferedArea){
+          if (length(disturbanceEnd)>1){
+            print("Size > 1. Debug")
+            browser()
+          } 
+          LayBuff <- terra::buffer(Lay[[disturbanceEnd]], width = 500) # Need to aggregate to avoid double counting!
+          LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
+          currArea <- terra::expanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
+          message(paste0("Buffered (500m) area for ", Sector, 
+                         " -- ", disturbanceEnd, ": ", round(currArea/1000000, 2), " Km2"))
+          message(paste0("Percentage of current area: ", round(100*((currArea/1000000)/totalstudyAreaVAreaSqKm), 3), "%."))
+        }
         return(Lay)
   })
   names(Connected) <- dPar[["dataName"]]
@@ -534,8 +868,9 @@ generateDisturbances <- function(disturbanceParameters,
   # To control for other cases:
   whichSectorHasMoreThanOne <- unique(nms[ave(seq_along(nms), nms, FUN = length)>1])
   if (length(whichSectorHasMoreThanOne) > 1){
-    stop(paste0("There are at least two sectors with more than one layers to merge, which is currently not supported. ",
-                "Please re-code (line 466 of generateDisturbances.R) to allow for this case"))
+    stop(paste0("There are at least two sectors with more than one layers to merge, which is",
+                "currently not supported. ",
+                "Please re-code (line 615 of generateDisturbances.R) to allow for this case"))
   }
   toMerge <- unlist(Connected)[which(!names(Connected) %in% whichSectorHasOne)]
   names(toMerge) <- NULL
@@ -559,79 +894,208 @@ generateDisturbances <- function(disturbanceParameters,
   # Now merge all disturbances (raster format) to avoid creating new disturbances where it has 
   # already been disturbed
 
-  currentDisturbance <- individuaLayers
+  currentDisturbance <- copy(individuaLayers)
+  # DEPRECATING BELOW: Instead of converting all to raster, convert ras to polys and keep all as vects
+  # curDistRas <- lapply(1:length(currentDisturbance), function(index1){
+  #   SECTOR <- names(currentDisturbance)[index1]
+  #   curDistRas <- lapply(1:length(currentDisturbance[[index1]]), function(index2){
+  #     Class <- names(currentDisturbance[[index1]])[index2]
+  #     ras <- currentDisturbance[[index1]][[index2]]
+  #     if (is.null(ras)){ 
+  #       message(paste0(Class, " of ", SECTOR, " is NULL. Returning NULL"))
+  #       return(NULL)
+  #     }
+  #     if (!class(ras) %in% c("RasterLayer", "SpatRaster")){
+  #       message(paste0("Converting ", Class, " of ", SECTOR, " from vector to raster..."))
+  #       # Now we fasterize so this is used to exclude pixels that have already been disturbed
+  #       # As some of these are lines, we will need to buffer them so they become polygons at
+  #       # the original resolution they had in the dataset
+  #       if (!is(ras, "SpatVector"))
+  #         ras <- vect(ras)
+  #       if  (terra::geomtype(ras) %in% c("points", "lines")) {
+  #         if ("resolutionVector" %in% dPar){
+  #           RES <- unique(dPar[disturbanceEnd == Class, resolutionVector])/2
+  #         } else RES <- NULL
+  #         if (any(is.na(RES),
+  #                 is.null(RES))){
+  #           message(crayon::red(paste0("resolutionVector in disturbanceParameters",
+  #                                      " table was not supplied for a lines file vector. Will ",
+  #                                      "default to 15m total (7.5m in each direction).",
+  #                                      " If this is not correct, please provide the ",
+  #                                      "resolution used for developing the layer ", Class,
+  #                                      " (", SECTOR,")")))
+  #           RES <- 7.5
+  #         }
+  #         currDistT <- terra::buffer(x = ras, width = RES)
+  #       }  else {
+  #         currDistT <- ras
+  #       }
+  #       currDistSF <- sf::st_as_sf(x = currDistT)
+  #       currDistSF$disturbance <- 1
+  #       fld <- "disturbance"
+  #       currentDisturbanceLay <- suppressWarnings(fasterize::fasterize(sf = st_collection_extract(currDistSF, "POLYGON"),
+  #                                                     raster = rasterToMatchR, field = fld))
+  #       # NOTE: 
+  #       # Seems that the fasterize is not picking up roads from currDistSF, which makes sense considering they are 
+  #       # much smaller than the resolution... However, this layer is just so we exclude the pixels that 
+  #       # have been disturbed already. This means that lines should be fine, as we have space for more 
+  #       # stuff to come in in a 250mx250m pixel that has 7.5 or 15m disturbed. For boo's models, we will 
+  #       # use the full layers and buffer before we fasterize (PopGrowth) and do the calculations of decay 
+  #       # in the polygon or at a higher resolution. So for now, this solution is fine.
+  #       return(rast(currentDisturbanceLay))
+  #     } else {
+  #       if (is(ras, "RasterLayer")){
+  #         message(paste0(Class, " of ", SECTOR, " is a RasterLayer, converting to SpatRaster..."))
+  #         ras <- rast(ras)
+  #       } else {
+  #         message(paste0(Class, " of ", SECTOR, " is either already a SpatRaster or NULL, skipping conversion..."))
+  #       }
+  #       return(ras)
+  #     }
+  #   })
+  #   if (length(curDistRas) == length(names(currentDisturbance[[index1]]))){
+  #     names(curDistRas) <- names(currentDisturbance[[index1]])
+  #   } else {
+  #      stop("The amount of rasters doesn't match the amount of names. Please debug.")
+  #    }
+  #   return(curDistRas)
+  # })
+  # if (length(curDistRas) == length(names(currentDisturbance))){
+  #   names(curDistRas) <- names(currentDisturbance)
+  # } else {
+  #   stop("The amount of rasters doesn't match the amount of names. Please debug.")
+  # }
   curDistRas <- lapply(1:length(currentDisturbance), function(index1){
     SECTOR <- names(currentDisturbance)[index1]
     curDistRas <- lapply(1:length(currentDisturbance[[index1]]), function(index2){
       Class <- names(currentDisturbance[[index1]])[index2]
       ras <- currentDisturbance[[index1]][[index2]]
-      if (!class(ras) %in% c("RasterLayer", "SpatRaster")){
-        message(paste0("Converting ", Class, " of ", SECTOR, " to a raster..."))
-        # Now we fasterize so this is used to exclude pixels that have already been disturbed
-        # As some of these are lines, we will need to buffer them so they become polygons at
-        # the original resolution they had in the dataset
-        if (!is(ras, "SpatVector"))
-          ras <- vect(ras)
-        if  (terra::geomtype(ras) %in% c("points", "lines")) {
-          if ("resolutionVector" %in% dPar){
-            RES <- unique(dPar[disturbanceEnd == Class, resolutionVector])/2
-          } else RES <- NULL
-          if (any(is.na(RES),
-                  is.null(RES))){
-            message(crayon::red(paste0("resolutionVector in disturbanceParameters",
-                                       " table was not supplied for a lines file vector. Will ",
-                                       "default to 15m total (7.5m in each direction).",
-                                       "If this is not correct, please provide the ",
-                                       "resolution used for developing the layer ", Class,
-                                       " (", SECTOR,")")))
-            RES <- 7.5
-          }
-          currDistT <- terra::buffer(x = ras, width = RES)
-        }  else {
-          currDistT <- ras
-        }
-        currDistSF <- sf::st_as_sf(x = currDistT)
-        currDistSF$disturbance <- 1
-        fld <- "disturbance"
-        currentDisturbanceLay <- suppressWarnings(fasterize::fasterize(sf = st_collection_extract(currDistSF, "POLYGON"),
-                                                      raster = rasterToMatch, field = fld))
-        # NOTE: 
-        # Seems that the fasterize is not picking up roads from currDistSF, which makes sense considering they are 
-        # much smaller than the resolution... However, this layer is just so we exclude the pixels that 
-        # have been disturbed already. This means that lines should be fine, as we have space for more 
-        # stuff to come in in a 250mx250m pixel that has 7.5 or 15m disturbed. For boo's models, we will 
-        # use the full layers and buffer before we fasterize (PopGrowth) and do the calculations of decay 
-        # in the polygon or at a higher resolution. So for now, this solution is fine.
-        
+      isNULLras <- is.null(ras)
+      isMAX0ras <- if (is(ras, "SpatVector"))
+        length(ras) == 0 else
+          max(ras[], na.rm = TRUE) == 0
+      if (any(isNULLras, isMAX0ras)){
+        message(paste0(Class, " of ", SECTOR, " is NULL. Returning NULL"))
+        return(NULL)
+      }
+      if (class(ras) %in% c("RasterLayer", "SpatRaster")){
+        message(paste0("Converting ", Class, " of ", SECTOR, " from raster to vector..."))
+        if (!is(ras, "SpatRaster"))
+          ras <- rast(ras)
+        ras[ras != 1] <- NA
+        currentDisturbanceLay <- terra::as.polygons(ras)
         return(currentDisturbanceLay)
       } else {
-        message(paste0(Class, " of ", SECTOR, " is already a raster, skipping conversion..."))
+        if (!is(ras, "SpatVector")){
+          message(paste0(Class, " of ", SECTOR, " is not SpatVector, converting to it..."))
+          ras <- rast(ras)
+        } else {
+          message(paste0(Class, " of ", SECTOR, " is either already a SpatVector or NULL, skipping conversion..."))
+        }
         return(ras)
       }
     })
-    names(curDistRas) <- names(currentDisturbance[[index1]])
+    if (length(curDistRas) == length(names(currentDisturbance[[index1]]))){
+      names(curDistRas) <- names(currentDisturbance[[index1]])
+    } else {
+      stop("The amount of rasters doesn't match the amount of names. Please debug.")
+    }
     return(curDistRas)
   })
-  names(curDistRas) <- names(currentDisturbance)
+  if (length(curDistRas) == length(names(currentDisturbance))){
+    names(curDistRas) <- names(currentDisturbance)
+  } else {
+    stop("The amount of rasters doesn't match the amount of names. Please debug.")
+  }
+  # BELOW IS DEPRECATED AS WE ARE NOT DEALING WITH RASTERS ANYMORE
+  # Make sure to return which ones are NULL and clean them up.
+  # curDistList <- unlist(curDistRas)
+  # stk <- rast(curDistList)
+  # stkDT <- data.table(pixelIndex = 1:ncell(stk),
+  #                     values(stk))
+  # stkDT[, currDisturbance := rowSums(.SD, na.rm = TRUE), .SDcols = names(stk)]
+  # 
+  # newDisturbanceLayers <- terra::setValues(rasterToMatch, stkDT[["currDisturbance"]])
+  # 
+  # # Cleanup the zeros where is actually NA
+  # newDisturbanceLayers[is.na(rasterToMatch)] <- NA
+  # 
+  # # Some disturbances happened in the same pixel (0.001% of the area), 
+  # # but this is a small problem and helps achieve the correct % in the end.  
+  # newDisturbanceLayers[newDisturbanceLayers[] > 1] <- 1
+  # 
+  # if (!is.null(allLaysRas)) {
+  #   newDisturbanceLayers[ == 1] <- 1
+  # } else stop("Something went wrong. allLaysRas (with all current disturbances) is NULL. Please debug.")
   
-  stk <- raster::stack(unlist(curDistRas))
-  stkDT <- data.table(pixelIndex = 1:ncell(stk),
-                      getValues(stk))
-  stkDT[, currDisturbance := rowSums(.SD, na.rm = TRUE), .SDcols = names(stk)]
+
+  # [ UPDATED ]
+  # curDistRas # List of newDisturbanceLayers
   
-  newDisturbanceLayers <- setValues(x = raster(rasterToMatch), 
-                                    values = stkDT[["currDisturbance"]])
-  # Cleanup the zeros where is actually NA
-  newDisturbanceLayers[is.na(rasterToMatch)] <- NA
+  # futureDistTb <- table(newDisturbanceLayers[])
+  # rtmTable <- table(rasterToMatch[])
+  # 
+  # message(paste0("Unbuffered (raster) updated disturbance percent of the area (",currentTime,"): ", 
+  #                round(100*(futureDistTb["1"]/rtmTable["1"]), 2), "%."))
+  # 
+  # newDisturbanceLayers[newDisturbanceLayers == 0] <- NA
+  # newDisturbanceLayersPol <- terra::as.polygons(newDisturbanceLayers)
+  # newDisturbanceLayersPol$totAreaKm2 <- terra::expanse(newDisturbanceLayersPol, 
+  #                                                      unit = "km", transform = FALSE) # Unbuffered to 500 but new layers + old
   
-  # Some disturbances happened in the same pixel (0.001% of the area), 
-  # but this is such a small problem I will not deal with right now.   
-  newDisturbanceLayers[newDisturbanceLayers[] > 1] <- 1
+  ########################### FINAL LAYERS ###########################
+
+  # individualLayers: mixed rasters and vectors, coming directly from the disturbances generated
+   
+  # curDistRas: all vectors, unbuffered new disturbances, no old ones here except for seismic lines and settlements
+  #             While seismic lines are not lines anymore (they got buffered to increase the disturbance), we still have lines
+  #             belonging to roads and pipelines.     
   
-  if (!is.null(currentDisturbanceLayer)) {
-    newDisturbanceLayers[currentDisturbanceLayer == 1] <- 1
+  ########################### FINAL LAYERS ###########################
+  
+  # Now I want to test it with 500m buffer --> For knowldge. The layers below are not 
+  # returned!!
+  
+  if (disturbanceRateRelatesToBufferedArea){
+    curDistVcs <- unlist(curDistRas)
+    
+    curDistVcsAll <- lapply(names(curDistVcs), function(eachVectNm){
+      eachVect <- curDistVcs[[eachVectNm]]
+      if (length(eachVect) == 0) return(NULL)
+      message(paste0("Buffering and/or merging polygons for ", eachVectNm))
+      buffVect <- terra::buffer(eachVect, width = 500)
+      buffVect <- terra::aggregate(buffVect, dissolve = TRUE)
+      return(buffVect)
+    })
+    newDisturbanceLayers <- do.call(rbind, curDistVcsAll)
+    newDisturbanceLayers <- terra::aggregate(newDisturbanceLayers, dissolve = TRUE)
+    
+    # Now I get the previous layers and do the same
+    oldDisturbanceLayers <- createBufferedDisturbances(disturbanceList = disturbanceList, 
+                                                                   bufferSize = 500,
+                                                                   rasterToMatch = rasterToMatch,
+                                                                   studyArea = studyArea,
+                                                                   currentTime = currentTime,
+                                                                   convertToRaster = FALSE)
+    
+    newDisturbanceLayers$totAreaKm2 <- terra::expanse(newDisturbanceLayers, 
+                                                      unit = "km", transform = FALSE) 
+    oldDisturbanceLayers$totAreaKm2 <- terra::expanse(oldDisturbanceLayers, 
+                                                      unit = "km", transform = FALSE) 
+    
+    message(paste0("Buffered 500m (polygons) old disturbance percent of the area (",currentTime,"): ", 
+                   round(100*(oldDisturbanceLayers$totAreaKm2/totalstudyAreaVAreaSqKm), 3), "%."))
+    
+    message(paste0("Buffered 500m (polygons) new disturbance percent of the area (",currentTime,"): ", 
+                   round(100*(newDisturbanceLayers$totAreaKm2/totalstudyAreaVAreaSqKm), 3), "%."))
+    
+    message(paste0("This means a total distubance growth rate of ", 
+                   (round(100*(newDisturbanceLayers$totAreaKm2/totalstudyAreaVAreaSqKm), 3)-round(100*(oldDisturbanceLayers$totAreaKm2/totalstudyAreaVAreaSqKm), 3))/unique(disturbanceParameters[["disturbanceInterval"]]),
+                   " per year."))
   }
   
   ### RETURN!
-  list(individuaLayers = individuaLayers, currentDisturbanceLayer = newDisturbanceLayers)
+  
+  list(individuaLayers = individuaLayers, 
+       currentDisturbanceLayer = curDistRas)
 }
