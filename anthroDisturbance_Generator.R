@@ -532,7 +532,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                             fun = "data.table::fread",
                                             header = TRUE, 
                                             userTags = "disturbanceParameters")
-
+    
     message(crayon::red(paste0("disturbanceParameters was not supplied. Defaulting to an example from ",
                    " Northwest Territories")))
   }
