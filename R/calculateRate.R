@@ -59,7 +59,7 @@ calculateRate <- function(disturbanceParameters,
     toFill <- AD_changed[Class %in% toLookFor[["classToSearch"]]]
     toUse <- merge(toFill, toLookFor[, c("classToSearch", "dataClass")], all.x = TRUE, 
                    by.x = "Class", by.y = "classToSearch")
-    toUse <- dcast(toUse, dataClass ~ ., fun.agg = sum, 
+    toUse <- data.table::dcast(toUse, dataClass ~ ., fun.agg = sum, 
                              value.var = c("year2010", "year2015"))
     # Need to recalculate proportions, though!
     toUse[, disturbProportionInArea2010 := year2010/totalstudyAreaVAreaSqKm]
