@@ -11,12 +11,17 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                  connectingBlockSize,
                                  disturbanceRateRelatesToBufferedArea,
                                  outputsFolder,
+                                 seismicLineGrids,
                                  checkDisturbancesForBuffer = FALSE,
-                                 runName){
+                                 runName,
+                                 useRoadsPackage,
+                                 siteSelectionAsDistributing,
+                                 probabilityDisturbance){
   
   # Extracting layers from previous ones
   # Total study area
   rasterToMatchR <- raster::raster(rasterToMatch)
+  probabilityDisturbance <- if (is.null(probabilityDisturbance)) list() else probabilityDisturbance
   
   if (!is(studyArea, "SpatVector"))
     studyArea <- terra::vect(studyArea)
@@ -33,12 +38,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
   message(crayon::white("Enlarging disturbances..."))
   dPar <- disturbanceParameters[disturbanceType  %in% "Enlarging", ]
   whichSector <- dPar[["dataName"]]
-  Enlarged <- lapply(whichSector, function(Sector) {
-    whichOrigin <- dPar[dataName == Sector, disturbanceOrigin]
-    if (length(whichOrigin) != 1) {
-      print("Repeated origins and sector. Debug")
-      browser()
-    } # Bug Catch
+  Enlarged <- lapply(1:nrow(dPar), function(ROW) {
+    Sector <- dPar[ROW, dataName]
+    whichOrigin <- dPar[ROW, disturbanceOrigin]
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
       Lay <- disturbanceList[[Sector]][[ORIGIN]]
       if (is.null(Lay)) {
@@ -193,9 +195,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
   # SECOND: Generating
   #############################################
   message(crayon::white("Generating disturbances..."))
-  
-  
-  # First, mask the current disturbances on the potential layer so we don't choose them again
+    # First, mask the current disturbances on the potential layer so we don't choose them again
   # Get the resolution for lines
   RES <- unique(disturbanceParameters[["resolutionVector"]])
   if (length(RES) > 1)
@@ -251,14 +251,10 @@ generateDisturbancesShp <- function(disturbanceParameters,
   
   dPar <- disturbanceParameters[disturbanceType  %in% "Generating", ]
   whichSector <- dPar[["dataName"]]
-  Generated <- lapply(whichSector, function(Sector) {
-    whichOrigin <- dPar[dataName == Sector, disturbanceOrigin]
-    if (length(whichOrigin) != 1) {
-      print("Repeated origins and sector. Debug")
-      browser()
-    } # Bug Catch
+  Generated <- lapply(1:nrow(dPar), function(ROW) {
+    Sector <- dPar[ROW, dataName]
+    whichOrigin <- dPar[ROW, disturbanceOrigin]
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
-      
       dParOri <- dPar[dataName == Sector & disturbanceOrigin == ORIGIN,]
       Lay <- disturbanceList[[Sector]][[ORIGIN]]
       if (is.null(Lay)) {
@@ -274,18 +270,13 @@ generateDisturbancesShp <- function(disturbanceParameters,
       
       # 1. Get the potential layer
       potLay <- disturbanceList[[Sector]][[dParOri[["dataClass"]]]]
-      if (length(potLay) == 0){# In case the cropped area doens't have anything
-        message(paste0("The potential area for ", Sector, " class ", ORIGIN, " is NULL.",
-                       " Likely cropped out from studyArea. Returning NULL."))
-        return(NULL)
-      } 
-
+      
       # Make sure we have only available places (i.e., remove fire places for forestry and 
       # remove the existing disturbances for all!)
-
+      
       if (Sector == "forestry"){
         # Update with fire layer if forestry
-      
+        
         message(paste0("Generating disturbance for forestry. Updating potential layer for ",
                        "occurred fires and currently productive forest for year ", currentTime))
         
@@ -300,12 +291,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 is.null(potField))){ 
           # If NA, it doesn't matter, but need to create a 
           # field so not the whole thing becomes one big 1 map
-          
-          potLaySF$Potential <- 1
           potField <- "Potential"
-          message(crayon::yellow(paste0("Potential field not declared for ", ORIGIN, " (",
-                                        Sector, "). Considering all polygons as likely to develop ",
-                                        "generated disturbance.")))
+          potLaySF$Potential <- 1
         }
         potLaySF <- subset(potLaySF, potLaySF$ORIGIN < (currentTime - 50))
         potLayF <- fasterize::fasterize(sf = st_collection_extract(potLaySF, "POLYGON"),
@@ -315,9 +302,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
           potLayF[fires[] == 1] <- NA
         # Convert the fire raster to polygons
         potLayT <- rast(potLayF)
-        tic("Time for creating fire polygons: ")
         potLay <- terra::as.polygons(potLayT)
-        toc()
         # Third: give preference to cutblocks that are closer to current cutblocks
         # Using terra is quicker!
         # # WITH NWT DATA, THE FOLLOWING LINES ARE USELESS AS ALL FOREST IS CLOSE ENOUGH
@@ -331,6 +316,25 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # distRas2[is.na(potLayF)] <- NA
       }
       
+      
+      # We need to aggregate the potential layer to make sure we have all possible polygons with the 
+      # same values with the same probability of developing the disturbance
+      aggby <- "Potential"
+      if (!"Potential" %in% names(potLay)){ # If we don't have Potential, we need to create it
+        if (length(names(potLay)) == 1){
+          names(potLay) <- "Potential"
+        } else {
+          potLay[["Potential"]] <- 1
+        }
+      }
+      if (NROW(potLay) > 1)
+        potLay <- aggregate(potLay, by = aggby, dissolve = TRUE, count = FALSE)
+      if (length(potLay) == 0){# In case the cropped area doens't have anything
+        message(paste0("The potential area for ", Sector, " class ", ORIGIN, " is NULL.",
+                       " Likely cropped out from studyArea. Returning NULL."))
+        return(NULL)
+      }
+
       # Get the disturbance rate
       disturbRate <- dParOri[["disturbanceRate"]]
       #Convert Rate into numeric (i.e. 0.2% = 0.002)
@@ -364,9 +368,6 @@ generateDisturbancesShp <- function(disturbanceParameters,
         LayBuff <- terra::buffer(Lay, width = 500) # Need to aggregate to avoid double counting!
         LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
         currArea <- terra::expanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
-        if (all(names(Lay) == c("Potential", "field"))) {
-          print("Line 368")
-          browser()} # Check if Lay has weird Potential and field columns
         if (length(currArea) == 0){
           message(paste0("No disturbance for ", Sector, 
                          " -- ", ORIGIN, ": currentArea = 0 Km2"))
@@ -386,16 +387,21 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # Get the possible places for the disturbances. Make sure there is enough place! Best potential 
         # are the places with max values
         valuesAvailable <- sort(as.numeric(unlist(potLay[[names(potLay)]])))
-        rowsToChoose <- (length(valuesAvailable)-(ITR-1)):length(valuesAvailable)
+       if (ORIGIN %in% siteSelectionAsDistributing){
+         rowsToChoose <- 1:length(valuesAvailable)
+        } else {
+          rowsToChoose <- (length(valuesAvailable)-(ITR-1)):length(valuesAvailable)
+        }
         potLayTop <- potLay[rowsToChoose]
         # Now exclude where disturbance already exists
         # Use intersect to see if they overlap.
         message(paste0("Intersecting existing disturbances with potential for development for ",
                        Sector, " -- ", ORIGIN))
         if (Sector == "forestry"){
-          croppedAllLays <- reproducible::cropInputs(allLays, potLayTop)#terra::crop(allLays, potLayTop)#
+          croppedAllLays <- reproducible::cropInputs(allLays, potLayTop)
           potLayTopValid <- terra::erase(potLayTop, croppedAllLays) # BEST AREA!
-        } else {
+        } else
+          if (!ORIGIN == "seismicLines") { # If "seismicLines", we don't need to erase as they can overlap
           doIntersect <- terra::intersect(allLays, potLayTop)
           if (nrow(doIntersect) > 0){
             # If so, erase.
@@ -405,18 +411,71 @@ generateDisturbancesShp <- function(disturbanceParameters,
             # If not, move on
             potLayTopValid <- potLayTop
           }
-        }
+        } else potLayTopValid <- potLayTop
         
         # Now check if there is enough space for the expected disturbance!
-        totalAreaAvailable <- terra::expanse(terra::aggregate(potLayTopValid, dissolve = TRUE), 
-                                             transform = FALSE, unit = "m")
+        totalAreaAvailable <- tryCatch(terra::expanse(terra::aggregate(potLayTopValid, dissolve = TRUE), 
+                                             transform = FALSE, unit = "m"), error = function(e) browser())
         ITR <- ITR + 1
-        }
+      }
+      
+      # If probabilityDisturbance is NOT provided, calculate
+      if (all(ORIGIN %in% siteSelectionAsDistributing,
+              is.null(probabilityDisturbance[[ORIGIN]]))){ # NOTE: Very time consuming!
+        message(paste0("probabilityDisturbance for ", ORIGIN, " is NULL. Calculating from data..."))
+        # 1. Extract the total area of each polygon type
+        potLayTopValid$areaPerPoly <- terra::expanse(potLayTopValid, unit = "m", transform = FALSE)
+        # 2. Sum all to calculate the total area of all polys
+        totAreaPolys <- sum(potLayTopValid$areaPerPoly)
+        # 3. Get the total disturbance area for each polygon type       
+        areaDistPerPoly <- terra::intersect(Lay, potLayTopValid) # This is super time demanding. 
+        # Allow to pass a proportion. This would also avoid completely selecting all polygons if passed! 
+        # 4. Calculate the total percentage of the disturbance per polygon type
+        buffSeisL <- terra::buffer(areaDistPerPoly, width = 3) # Need to aggregate to avoid double counting!
+        areaDistPerPoly$area <- terra::expanse(buffSeisL, unit = "m", transform = FALSE)
+        areaDT <- as.data.table(areaDistPerPoly[, c("Potential", "area")])
+        totAreaDT <- areaDT[, disturbedArea := sum(area), by = Potential]
+        totAreaDT[, area := NULL]
+        totAreaDT <- unique(totAreaDT)
+        totAreaDT[, probPoly := disturbedArea/sum(totAreaDT$disturbedArea)]
+        # 5. This percentage is = to the probability a disturbance will occur in that polygon --> Need to pass this value!
+        probabilityDisturbance[[ORIGIN]] <- totAreaDT[, c("Potential", "probPoly")]
+      } else {
+        # If provided, test that probabilityDisturbance matches the Potential
+        potValsPassed <- unique(sort(probabilityDisturbance[[ORIGIN]][["Potential"]]))
+        potValsLay <- unique(sort(potLayTopValid$Potential))
+        passTest <- all(potValsPassed == potValsLay)
+        if (!passTest)
+          stop(paste0("The probabilityDisturbance was provided, but do not match the expected Potential values for ",
+                      ORIGIN, ".\n",
+                      "Potential values passed: ", paste(potValsPassed, collapse = ", "), "\n",
+                      "Potential values in layer: ", paste(potValsLay, collapse = ", ")))
+      }
+      # For seismic Lines we need to do some area processing of the before we can 
+      # generate the disturnances. And we don't want to repeat this every time inside
+      # a while loop, as it doesn't change, so we do it outside
+      if (ORIGIN == "seismicLines"){
+        # 1. Crop and mask the seismicLines layer to the actual most probable area (potLayTopValid)
+        cropLay <- postProcessTo(Lay, potLayTopValid)
+        # 2. Convert all lines to polygons to exclude them from selecting the random point
+        # DOUBLE CHECK I CAN'T MAKE POLYGONS OUT OF THE LINES USING extent=TRUE!
+        cropLayBuf <- buffer(cropLay, width = 50)
+        cropLayAg <- aggregate(cropLayBuf, dissolve = TRUE)
+        finalPotLay <- erase(potLayTopValid, cropLayAg)
+        # 4. Calculate the total length of lines in the "chosen area", their mean and sd 
+        # NOTE: Although we have for the whole area, it is better to improve it with data from specific
+        # the specific area we are working on.
+        message("Getting the line's length, average and sd...")
+        cropLay$lengthLines <- perim(cropLay)
+        Mean <- mean(cropLay$lengthLines)
+        Sd <- sd(cropLay$lengthLines)
+      }
+      
       # 1. Make the iteration, and while the area is not achieved, continue 
       areaChosenTotal <- 0
       IT <- 1
-      set.seed(1983)
       newDisturbs <- NULL
+      alreadyReduced <- FALSE
       while (areaChosenTotal < expectedNewDisturbAreaSqM){
         if (IT %in% 1:10){
           message(paste0("Calculating total generated disturbance size for ", Sector, " for ", 
@@ -428,19 +487,22 @@ generateDisturbancesShp <- function(disturbanceParameters,
                          ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
                          round(100*(round(areaChosenTotal, 0)/round(expectedNewDisturbAreaSqM, 0)), 2),"% achieved)"))
         }
-        # Check how this process is happening!! When IT == 2, the new "field" is created 
-        # as newDist or when rbinding newDist and newDisturbs
-        
         # 1.1. Get each disturbance's size. If the expected disturbance is smaller than the 
         # normal size, we only disturb what is expected
-        Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
+          Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
         # If the Size is larger than expectedNewDisturbAreaSqM, we might first make a probability of 
         # the disturbance happening. 
         if (Size > expectedNewDisturbAreaSqM){
           p <- rbinom(1, size = 1, prob = (expectedNewDisturbAreaSqM/Size))
           disturbanceHappening <- if (p == 1) TRUE else FALSE
         } else disturbanceHappening <- TRUE
-      
+          # If the disturbance doesn't happen:
+          if (!disturbanceHappening){
+            message(paste0("Rate of disturbance for ", ORIGIN, " is very small and the probability of ",
+                           "this disturbance happening returned 0.",
+                           " Returning layer without disturbances."))
+            next
+          }
        # 1.3. Once the best places are chosen, we place the disturbance in a new layer, which will 
         # have to be updated until we leave the while loop
         # Make an inner buffer with the half of the size of the Size to make sure we have the full 
@@ -449,50 +511,178 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # the area. Probably crashing because the area is smaller than I am asking it to make the inner buffer
         # potLayTopValidIn <- terra::buffer(potLayTopValid, width = -(Size/2))
         # potLayTopValidIn <- terra::makeValid(potLayTopValidIn)
-        # Get a point within the layer:
-        centerPoint <- terra::spatSample(potLayTopValid, size = 1, method = "random")
-        while (nrow(centerPoint) < 1){
-          centerPoint <- terra::spatSample(potLayTopValid, size = 1, method = "random")
-        }
-        # If the disturbance doesn't happen:
-        if (!disturbanceHappening){
-          message(paste0("Rate of disturbance for ", ORIGIN, " is very small and the probability of ",
-                         "this disturbance happening returned 0.",
-                         " Returning layer without disturbances."))
-          next
-        }
-        newDist <- SpaDES.tools::randomStudyArea(center = centerPoint, size = Size)
-        names(newDist) <- names(centerPoint)
-        # 1.4. If we relate to buffered area, we need to make an inner buffer, as it is included in 
-        # areaChosenTotal.
-        if (disturbanceRateRelatesToBufferedArea){
-          minDistBuff <- terra::buffer(centerPoint, width = 500)
-          areaMinDB <- terra::expanse(minDistBuff)
-          areaNewDist <- terra::expanse(newDist)
-          # If the new disturbance is smaller than its buffered to 500m version, means we can't reduce it, so
-          # we use just a point instead, so when it is buffered, it has the similar size expected.
-          if (areaNewDist < areaMinDB){
-            newDist <- centerPoint
-            newDistBuff <- terra::buffer(newDist, width = 500)
-          } else {
-            # Otherwise, we buffer innwards and that's our disturbance
-            newDist <- terra::buffer(newDist, width = -500)
-            if (!terra::is.valid(newDist)){
-              message("newDist has invalid geom. Debug")
-              browser()
+          if (ORIGIN == "seismicLines"){ 
+            distApropExp <- areaChosenTotal/expectedNewDisturbAreaSqM
+            if (all(!alreadyReduced, 
+                    distApropExp > 0.85)){
+              seismicLineGridsO <- seismicLineGrids
+              seismicLineGrids <- round(((seismicLineGrids*IT*(1-distApropExp))/distApropExp)/4, 0)
+              message(paste0("Total expected disturbance almost achieved, reducing the number of grids from ", 
+                             seismicLineGridsO, " to ", seismicLineGrids))
+              alreadyReduced <- TRUE
             }
-            newDistBuff <- terra::buffer(newDist, width = 500)
+            rs <- matrix(runif(2*seismicLineGrids, 50, 100), ncol = 2, byrow = TRUE) # For the raster below
+            if (ORIGIN %in% siteSelectionAsDistributing){
+              # 6. Select from the polygon finalPotLay the one which will have the disturbance by applying the probability
+              polyToChoose <- sample(probabilityDisturbance[[ORIGIN]][["Potential"]],
+                                     size = 1,
+                                     prob = probabilityDisturbance[[ORIGIN]][["probPoly"]])
+              currFinalPotLay <- finalPotLay[finalPotLay$Potential == polyToChoose]
+              centerPoint <- terra::spatSample(currFinalPotLay, size = seismicLineGrids, method = "random")
+            } else {
+              centerPoint <- terra::spatSample(finalPotLay, size = seismicLineGrids, method = "random")              
+            }
+            while (length(centerPoint) != seismicLineGrids){
+              # If center point has less rows than size, it means that the sampling likely got all 
+              # the area possible if replace = FALSE, the default. So the missing ones need to be 
+              # added to the center point in the next best available area.
+              howManyMissing <- seismicLineGrids-length(centerPoint)
+              if (howManyMissing < 0){
+                message(paste0("spatSample has sampled ", length(centerPoint), " while the expected ",
+                               "number of points was ", seismicLineGrids, ". Entering browser mode."))
+                browser()
+              } 
+              message(paste0("spatSample has sampled ", length(centerPoint), " while the expected ",
+                             "number of points was ", seismicLineGrids, ". Choosing more points from ",
+                             "next best area..."))
+               valsToExclude <- as.numeric(unique(potLayTopValid[["Potential"]]))
+               nextBestValue <- max(setdiff(valuesAvailable, valsToExclude))
+               rowsToChoose <- which(valuesAvailable == nextBestValue)
+               potLayTopValid <- potLay[rowsToChoose]
+               # 1. UPDATING THE LAYER: 
+               cropLay <- postProcessTo(Lay, potLayTopValid)
+               cropLayBuf <- buffer(cropLay, width = 50)
+               cropLayAg <- aggregate(cropLayBuf, dissolve = TRUE)
+               finalPotLay <- erase(potLayTopValid, cropLayAg)
+               centerPointToAdd <- terra::spatSample(finalPotLay, size = howManyMissing, method = "random")
+               centerPoint <- rbind(centerPoint, centerPointToAdd)
+            }
+            # 5. Draw the new grid based on the total length expected
+            # 5.1. Draw a square based on the centerPoint, where the distance from point to the lines 
+            # is the diagonal of a square of the lineLenght you want.
+            lineLength <- rtnorm(length(centerPoint), Mean, Sd, lower = 0)
+            # 5.2. Make a square polygon with the center point and the distance
+            gridReady <- lapply(1:seismicLineGrids, function(ROW){
+             pnt <- vect(matrix(c(xmin(centerPoint[ROW,])-(lineLength[ROW]/2), ymin(centerPoint[ROW,]),
+                            xmin(centerPoint[ROW,])+(lineLength[ROW]/2), ymin(centerPoint[ROW,]),
+                            xmin(centerPoint[ROW,]), ymin(centerPoint[ROW,])+(lineLength[ROW]/2),
+                            xmin(centerPoint[ROW,]), ymin(centerPoint[ROW,])-(lineLength[ROW]/2)), 
+                          ncol = 2, byrow = TRUE), type="points", crs=crs(centerPoint[ROW,]))
+             polyArea <- as.polygons(pnt, extent=TRUE)
+             # 5.3. Create a raster with the desired distance between the points
+             polRas <- tryCatch(rast(polyArea, resolution = rs[ROW,]), error = function(e) browser())
+              # To points: This is now a vector
+              gridPoints <- suppressWarnings(as.points(polRas, na.rm = TRUE))
+              # Now I need to find the first and last dots to connect
+              # Rows: 
+              # NOTE: We can tilt by simply choosing different end points!!
+              rowsOfPointsL <- lapply(0:(dim(polRas)[2]-1), function(rowIndex){
+                thePair <- c(1, (ncell(polRas)-(dim(polRas)[2]-1)))+rowIndex
+                # create the line based on the points by extracting the points based on thePair 
+                theLine <- as.lines(gridPoints[thePair, ])
+                return(theLine)
+              })
+              rowsOfPoints <- do.call(rbind, rowsOfPointsL)
+              # Cols:
+              colsOfPointsL <- lapply(0:(dim(polRas)[1]-1), function(colIndex){
+                thePair <- c(1, dim(polRas)[2])+(colIndex*dim(polRas)[2])
+                # create the line based on the points by extracting the points based on thePair 
+                theLine <- as.lines(gridPoints[thePair, ])
+                return(theLine)
+              })
+              colsOfPoints <- do.call(rbind, colsOfPointsL)
+              # Now we do 0 to two random crossing lines
+              howManyCross <- sample(x = seq(0, 2), size = 1)
+              if (howManyCross > 0){
+                # Find all points that are in each edge
+                up <- c(1:dim(polRas)[2])
+                bottom <- c((ncell(polRas)-(dim(polRas)[2]-1)):ncell(polRas))
+                left <- NULL
+                for (i in 0:(dim(polRas)[1]-1)){
+                  left <- c(left, 1+(i*dim(polRas)[2]))
+                }
+                right <- left + (dim(polRas)[2]-1)
+                allDirs <- c("up", "bottom", "left", "right")
+                crossLines <- lapply(1:howManyCross, function(tms){
+                  dir1 <- sample(x = allDirs, 1)
+                  dir2 <- sample(setdiff(allDirs, dir1), 1)
+                  thePair <- c(sample(get(dir1), 1), sample(get(dir2), 1))
+                  # create the line based on the points by extracting the points based on thePair 
+                  theLine <- as.lines(gridPoints[thePair, ])
+                  return(theLine)
+                })
+                crossedLines <- do.call(rbind, crossLines)
+              } else {
+                crossedLines <- howManyCross <- NULL
+              }
+              gridReady <- do.call(rbind, list(rowsOfPoints, colsOfPoints, crossedLines))# Is the newly created grid
+              return(gridReady)
+            })
+            gridReadyB <- do.call(rbind, gridReady)
+            # newDist NEEDS to be buffered, first by 3m and then by by 500m, if disturbanceRateRelatesToBufferedArea 
+            # Although dParOri[["resolutionVector"]] has vector resolution, seismic lines are much slimmer.
+            # In the past, they used to be placed 300–500 m apart, and 5–10 m wide. 
+            # Nowadays, the average is 3m wide (2-4, usually not more than 5.5m) and about 50–100m apart 
+            # (Dabros et al., 2018 - DOI: 10.1139/er-2017-0080)
+            newDist <- terra::buffer(gridReadyB, width = 3)
+          } else {
+            # Get a point within the layer:
+            if (ORIGIN %in% siteSelectionAsDistributing){
+              polyToChoose <- sample(probabilityDisturbance[[ORIGIN]][["Potential"]],
+                                     size = 1,
+                                     prob = probabilityDisturbance[[ORIGIN]][["probPoly"]])
+              currFinalPotLay <- potLayTopValid[potLayTopValid$Potential == polyToChoose]
+              centerPoint <- terra::spatSample(currFinalPotLay, size = seismicLineGrids, method = "random")             
+            } else {
+              centerPoint <- terra::spatSample(potLayTopValid, size = 1, method = "random")
+            }
+            while (nrow(centerPoint) < 1){
+              centerPoint <- terra::spatSample(potLayTopValid, size = 1, method = "random")
+            }
+            # Here we create a random study area based on the center point for the area where 
+            # the disturbance is more likely to happen.
+            newDist <- SpaDES.tools::randomStudyArea(center = centerPoint, size = Size)
+            names(newDist) <- names(centerPoint)
+            if (is.na(newDist)) browser()
+            # 1.4. If we relate to buffered area, we need to make an inner buffer, as it is included in 
+            # areaChosenTotal.
+            if (disturbanceRateRelatesToBufferedArea){
+              # Then, if disturbanceRateRelatesToBufferedArea, we buffer this point to identify what 
+              # if the minimum area we can have. Then, we also calculate the area of the new disturbance 
+              # and we check if the area of the new disturbance is smaller than the minimum area of the 
+              # buffered point. 
+              minDistBuff <- terra::buffer(centerPoint, width = 500)
+              areaMinDB <- terra::expanse(minDistBuff)
+              areaNewDist <- terra::expanse(newDist)
+              # If the new disturbance is smaller than its buffered to 500m version, means we can't reduce it, so
+              # we use just a point instead, so when it is buffered, it has the similar size expected.
+              if (areaNewDist < areaMinDB){
+                newDist <- centerPoint
+              } else {
+                # Otherwise, we buffer innwards and that's our disturbance
+                newDist <- terra::buffer(newDist, width = -500)
+                if (any(!terra::is.valid(newDist),
+                        any(is.na(as.vector(ext(newDist)))))){
+                  newDist <- centerPoint
+                }
+              }
+            }
           }
-          areaChosenTotal <- areaChosenTotal + terra::expanse(newDistBuff)
-        } else {
-          areaChosenTotal <- areaChosenTotal + terra::expanse(newDist)
+        if (disturbanceRateRelatesToBufferedArea){
+          newDistBuff <- terra::buffer(newDist, width = 500) 
+          if (nrow(newDistBuff) > 1){
+            newDistBuff <- terra::aggregate(newDistBuff)
+          }
+          areaChosenTotal <- areaChosenTotal + terra::expanse(newDistBuff, unit = "m", transform = FALSE)
+        } else { 
+          areaChosenTotal <- areaChosenTotal + terra::expanse(newDist, unit = "m", transform = FALSE)
         }
-          if (geomtype(newDist) == "points"){
+          if (geomtype(newDist) %in% c("points", "lines")){
             if (IT == 2)
               message("Types of geometry differ, buffering new disturbance to a minimum value")
             wid <- 0.0000000003  
             newDistBuf <- terra::buffer(newDist, width = wid)
-            while (is.na(newDistBuf[[1,]])){
+            while (any(is.na(as.vector(ext(newDistBuf))))){
               message(paste0("Minimum buffering size (", wid,") failed. Increasing buffering size..."))
               wid <- wid + wid
               newDistBuf <- terra::buffer(newDist, width = wid)
@@ -672,47 +862,55 @@ generateDisturbancesShp <- function(disturbanceParameters,
         endLay <- rbind(endLay, connectedOne)
       }          
     } else {
-      for (i in 1:NROW(oriLayVect)){
-        if(i%%100==0)
-          message(paste0("Connecting ", Sector," for year ", currentTime,
-                         ": ", i ," of ", NROW(oriLayVect),
-                         " (", 100*round(i/NROW(oriLayVect),4),"%)"))
-        endLayCropped <- terra::crop(endLay, oriLayVect[i, ])  
-        if (!NROW(endLayCropped) == 0){ # If you still have overlap with the crop, make sure they really overlap
-          intersectedOriEnd <- terra::intersect(endLayCropped, oriLayVect[i, ])
-          if (!NROW(intersectedOriEnd) == 0){
+      
+      # HERE COMES THE roads PACKAGE!!! Need to create `connected`!
+      if (useRoadsPackage){
+        browser()
+      } else {
+        # Here comes what is below...
+        for (i in 1:NROW(oriLayVect)){
+          if(i%%100==0)
             message(paste0("Connecting ", Sector," for year ", currentTime,
                            ": ", i ," of ", NROW(oriLayVect),
-                           " OVERLAPS with final layer, moving to next polygon"))
-            next
+                           " (", 100*round(i/NROW(oriLayVect),4),"%)"))
+          endLayCropped <- terra::crop(endLay, oriLayVect[i, ])  
+          if (!NROW(endLayCropped) == 0){ # If you still have overlap with the crop, make sure they really overlap
+            intersectedOriEnd <- terra::intersect(endLayCropped, oriLayVect[i, ])
+            if (!NROW(intersectedOriEnd) == 0){
+              message(paste0("Connecting ", Sector," for year ", currentTime,
+                             ": ", i ," of ", NROW(oriLayVect),
+                             " OVERLAPS with final layer, moving to next polygon"))
+              next
+            }
           }
+          if (any(is.na(as.vector(ext(oriLayVect[i, ]))))){
+            print("oriLayVect extent is NA. Fix didn't work. Debug.")
+            browser()
+          } 
+          connectedOne <- terra::nearest(oriLayVect[i, ], endLay, 
+                                         pairs = FALSE, 
+                                         centroids = TRUE, 
+                                         lines = TRUE)
+          # 4. Update the endLayer with the new connection
+          if (!is(connectedOne, "SpatVector"))
+            connectedOne <- terra::vect(connectedOne)
+          if (exists("connected")){
+            connected <- rbind(connected, connectedOne)
+          } else {
+            connected <- connectedOne
+          }
+          endLay <- rbind(endLay, connectedOne)
         }
-        if (is.na(oriLayVect[i, ][[1,]])){
-          print("oriLayVect extent is NA. Fix didn't work. Debug.")
-          browser()
-        } 
-        connectedOne <- terra::nearest(oriLayVect[i, ], endLay, 
-                                       pairs = FALSE, 
-                                       centroids = TRUE, 
-                                       lines = TRUE)
-        # 4. Update the endLayer with the new connection
-        if (!is(connectedOne, "SpatVector"))
-          connectedOne <- terra::vect(connectedOne)
-        if (exists("connected")){
-          connected <- rbind(connected, connectedOne)
-        } else {
-          connected <- connectedOne
+        message(paste0("For loop for ", Sector," -- ", disturbanceEnd, " finished."))
         }
-        endLay <- rbind(endLay, connectedOne)
-      }
-      message(paste0("For loop for ", Sector," -- ", disturbanceEnd, " finished."))
+
     }
     if (!exists("connected")){ # It's likely because the one or few created disturbances were 
       # overlapping with their final connection. This means, connected doesn't exist and we need to 
       # return(NULL)
       return(NULL)
     }
-    connected[["Class"]] <- classEndLay
+    connected[["Class"]] <- na.omit(classEndLay)
     Lay <- list(connected)
     names(Lay) <- disturbanceEnd
     if (disturbanceRateRelatesToBufferedArea){
