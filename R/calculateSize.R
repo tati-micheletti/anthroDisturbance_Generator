@@ -40,7 +40,11 @@ calculateSize <- function(disturbanceParameters,
         if (lay %in% "RasterLayer") lay <- rast(lay)
         lay <- as.polygons(lay, dissolve = FALSE)
       }
-      allAreas <- terra::expanse(lay, transform = FALSE, unit = "m")
+      if (geomtype(lay) %in% c("lines")){
+        allAreas <- terra::perim(lay)
+      } else {
+        allAreas <- terra::expanse(lay, transform = FALSE, unit = "m")
+      }
       sub[, disturbanceSize := paste0("rtnorm(1, ", round(mean(allAreas), 2), ", ", round(sd(allAreas), 2), ", lower = 0)")]
       }
     return(sub)
