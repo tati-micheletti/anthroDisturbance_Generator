@@ -8,7 +8,8 @@ saveDisturbances <- function(disturbanceList,
     if (class(disturbanceList[[Sector]]) %in% c("SpatVector", 
                                                     "sf",
                                                     "RasterLayer",
-                                                    "SpatRaster")){
+                                                    "SpatRaster")){ 
+      # The class here is expected to be a list. But we might have cases when it is not
       message(paste0("Layer: ", Sector, " was likely not generated (i.e., lack of potential ",
                      "disturbance layer). Saving current disturbance layer (i.e., this layer may ",
                      "not vary through time!)"))
@@ -37,13 +38,15 @@ saveDisturbances <- function(disturbanceList,
             warning(paste0("The layer for ",Sector," -- ",LAYER, "is NULL. Not saving."), 
                     immediate. = TRUE)
           } else stop(paste0("Objects of class ", class(Lay), "can't be used in the module. ",
-                             "Please make sure all spatial objects are of raster, sp, sf or terra format."))
+                             "Please make sure all spatial objects are of raster, sp, sf or terra formats."))
         }
       }
     } else {
     lay <- lapply(whichLay, function(LAYER){
         Lay <- disturbanceList[[Sector]][[LAYER]]
         message(paste0("Saving layer: ", Sector, " -- ", LAYER))
+        if (all(is.na(unique(Lay$Class))))
+          Lay$Class <- LAYER
         if (any(class(Lay) %in% c("SpatVector", "sf"),
                 is(Lay, "Spatial"))){
           if (!is(Lay, "SpatVector"))
