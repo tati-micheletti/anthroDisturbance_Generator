@@ -1,7 +1,7 @@
 ---
 title: "anthroDisturbance_Generator"
 author: "Tati Micheletti"
-date: "16 July 2022"
+date: "6th June 2024"
 output:
   pdf_document: default
   html_document:
@@ -14,9 +14,11 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE, eval = FALSE, results = "hold")
 ```
 
+# Version 1.0.0
+
 # Overview
 
-This is a module to generate anthropogenic disturbances. It's primarily intended for the Northwest Territories region (default), but the structure is universal. All needed to do is provide the metadata information required by the `disturbanceParameters` object and the `disturbanceList` containing current disturbances and potential disturbances (i.e., for disturbances of Generating type, explained below).  
+This is a module to generate anthropogenic disturbances. It's primarily intended for the Northwest Territories region (default), but the structure is universal. All needed to do is provide the metadata information required by the `disturbanceParameters` object and the `disturbanceList` containing current disturbances and potential disturbances (i.e., for disturbances of Generating type, explained below), and make sure these are described in `disturbanceDT`.  
 
 # Usage
 
@@ -81,13 +83,22 @@ disturbanceList <- simInitAndSpades(times = times,
 This module has a couple parameters that can be adjusted by the user. Namely:  
 - `saveInitialDisturbances`: This is a logical and defaults to `TRUE`. Should the disturbance rasters be saved at each step? These are saved to `Paths[['outputPath']]` as a `RasterLayer`, with `disturbanceLayer` as prefix the name of the industry (i.e., Sector) and the year as suffix. If `TRUE`, it saves the initial conditions (IC);    
 - `saveCurrentDisturbances`: This is a logical and defaults to `TRUE`. Should the disturbance rasters be saved at each step? These are saved to `Paths[['outputPath']]` as a `RasterLayer`, with `disturbanceLayer` as prefix the name of the industry (i.e., Sector) and the year as suffix. If `TRUE`, it saves at the end of each step;    
-- `useECCCData`: This is a logical and defaults to `TRUE`. If the rate of change (i.e., rate the disturbances will be generated across the landscape) is not provided, the module can either try to extract it from data if `useECCCData = TRUE` (i.e., ECCC human footprint for 2010 and 2015 data), or simply apply a rate of 0.2% (of the total area) increase per year;  
-- `checkChangeInDisturbance`: This is a logical and defaults to `FALSE`. When `TRUE`, this prints the change in ECCC human footprint (2010 to 2015) at 30m resolution over the shapefile provided. However, this operation is time consuming;    
-- `checkDisturbance2015`: This is a logical and defaults to `FALSE`. Prints the total % of ECCC human footprint (2010 to 2015) at 500m resolution over the shapefile provided. However, this operation is time consuming;  
-- `overwriteDisturbanceLayers2015`: This is a logical and defaults to `FALSE`. Should the disturbance layer from 2015 be overwritten? This is handy when the disturbance layer has changed;    
-- `overwriteDisturbanceLayers2010`: This is a logical and defaults to `FALSE`. Should the disturbance layer from 2010 be overwritten? This is handy when the disturbance layer has changed;   
 - `growthStepEnlargingPolys`: This is a numeric and defaults to `0.0075`. Growth step used for iteratively achieving the total area growth of new disturbances type Enlarging for polygons. If the iterations take too long, one should increase this number. If the summarized value is too far from 0, one should decrease this number;  
 - `growthStepEnlargingLines`: This is a numeric and defaults to `0.1`. Growth step used for iteratively achieving the total area growth of new disturbances type Enlarging for lines. If the iterations take too long, one should increase this number. If the summarized value is too far from 0, one should decrease this number.    
+- `generatedDisturbanceAsRaster`: Should the new disturbances generated be in raster format? This has potential downsides regarding size of disturbances generated (i.e., minimum size possible is the resolution of raster)
+checkDisturbancesForBuffer: Should the module check the recently generated disturbances? This means that the module will buffer the recently disturbed layer and compare it to the previous layer, outputting a message indicating how much of the total area this represents. Note that no objects are created, just the message is outputted.
+- `disturbFirstYear`: Should disturbances be generated already in the initial year? Normally, we would save the initial disturbances (i.e., 2011) as they are coming from data, and only start generating disturbances once we don't have the data(i.e., post-2015). So this defaults to FALSE.If TRUE, it will already generate disturbances in start(sim)
+disturbanceRateRelatesToBufferedArea: Is the DisturbanceRate a % of already buffered (to 500m) disturbance? This is normally what is used for caribou.
+- `growthStepGenerating`: Increasing factor to speed up total area of new disturbances type Generating. If the iterations take too long, one should increase this number. If the summarized value is too far from 0, one should decrease this number. Not used if disturbanceRateRelatesToBufferedArea == TRUE
+- `connectingBlockSize`: connectingBlockSize defaults to NULL. It is used to connecting layers after generation. Applying blocking technique speeds up disturbance. If too high, many lines might connect from the same place. Decreasing  the parameter connectingBlockSize or setting it to NULL, will improve
+- `seismicLineGrids`: How many grids concomitantly should the model produce when creating  seismic lines? Defaults to 500. If seismic disturbance is being produced over the expected amount, please provide smaller values.
+- `.inputFolderFireLayer`: If you have the fire (i.e., rstCurrBurn) in a folder that is NOT the inputs folder, you can pass it here
+totalDisturbanceRate: If passed, the module will use ECCC data to calculate the % eachdisturbance should represent to be to achieve (as close as possible) the total expected disturbance rate. Mainly used for early in simulations, when value ranges are unknown.
+- `aggregateSameDisturbances`: If TRUE, when using ECCC data to calculate disturbance rates, it aggregates the features that have the same class and dissolves their boundaries.  This may influence disturbance rate calculations especially if disturbanceRateRelatesToBufferedArea = TRUE (i.e., overlapping disturbances from the same class will be double counted if aggregateSameDisturbances = FALSE) If DisturbanceRate is provided, this parameter is ignored.
+- `maskOutLinesFromPolys`: If TRUE, when using ECCC data to calculate disturbance rates, it masks out the lines from polygons when these overlap (i.e., more likely when  disturbanceRateRelatesToBufferedArea = TRUE). This may influence disturbance rate calculations as these will be double counted if FALSE). If DisturbanceRate is provided, this parameter is ignored.
+- `siteSelectionAsDistributing`: Informs which disturbance should NOT be of type 'exhausting': exhausts the area available for new disturbances sequentially, from the most to the least likely. Provided classes will be used with 'distributing' to probabilistically select which polygon  (i.e., area) the provided disturbance will fall within.There is speed tradeoff in using 'exhausting', and 'disturbing'. While distributing is more accurate, exhausting is  likely a good option for uncommon (i.e., windpower), or specific (i.e., forestry, mining, oil facilities) disturbances, which likely won't cover the whole extent of the area. 'distributing' is slower but might be morerealistic for disturbances which have the potential of overtaking an area (i.e., seismic lines). Defaults to NA but can take any of the disturbanceOrigin from the input disturbanceParameters (i.e., oilGas,mining, cutblocks, windTurbines, seismicLines)
+- `probabilityDisturbance`: Informs to disturbances passed on siteSelectionAsDistributing the probability of each specific polygon being chosen. If passed, needs to be a list 2-column data.table with names 'Potential'and 'probPoly' with Potential matching disturbance ORIGIN from disturbanceParameters and probPoly matching the probabilities for each polygon (generally higher values are more likely to have disturbances happening). Defaults to NULL, which is time consuming, but calculates it automatically from data.
+- `.runName`: If you would like your simulations' results to have an appended name (i.e., replicate number, study area, etc) you can use this parameter
 
 
 ```{r moduleParams}
@@ -137,7 +148,10 @@ The module expects only one input.
    + 3. Connecting (i.e., potentialPipelines, potentialTransmission, potentialRoads incl. forestry ones): where the potential layer needs to have the current/latest transmission, pipeline, and road network. This process will depend on what is generated in point 2.;  
   + `fileName`: If the original file is a .zip and the features are stored in one of more shapefiles inside the .zip, please provide which shapefile  to be used;  
   + `dataType`: Provide the data type of the layer to be used. These are the current accepted  formats: 'shapefile' (.shp or .gdb), 'raster' (.tif, which will be converted into shapefile), and 'mif' (which will be read as a shapefile). The last defaults to an example in the Northwest Territories and needs to be provided if the study area is not in this region (i.e., union of BCR6 and NT1).  
+- `DisturbanceRate`: Rate of change (disturbance) increase over the study area per year. Defaults to calculating the disturbance (ECCC data) over the entire area per year, if totalDisturbanceRate is not provided. Needs to have:dataName: settlements, oilGas, oilGas, mining, forestry, EnergydataClass: potentialSettlements, potentialSeismicLines, potentialOilGas,potentialMining, potentialCutblocks, potentialWindTurbinesdisturbanceType: Enlarging or Generating (see disturbanceDT object for details)disturbanceOrigin: settlements, seismicLines, oilGas, mining, cutblocks, windTurbinesdisturbanceRate: representing a % of the study area to be newly disturbed per year
+
 Other inputs needed by this module are the the study area (`studyArea`) and a raster (`rasterToMatch``) that matches the study area and provides the spatial resolution for the simulations.  
+
 
 ```{r moduleInputs}
 df_inputs <- SpaDES.core::moduleInputs("anthroDisturbance_Generator", moduleDir)
