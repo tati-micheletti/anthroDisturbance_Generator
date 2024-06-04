@@ -28,7 +28,7 @@ defineModule(sim, list(
   reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
                   "data.table", "PredictiveEcology/reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
-                  "fasterize", "stars", "nngeo", "tictoc"), #TODO review needed packages. 
+                  "fasterize", "stars", "nngeo", "tictoc"), #TODO review needed packages. Next release: "roads"
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -101,6 +101,10 @@ defineModule(sim, list(
     defineParameter(".runName", "character", "run1", NA, NA,
                     paste0("If you would like your simulations' results to have an appended name ",
                            "(i.e., replicate number, study area, etc) you can use this parameter")),
+    defineParameter("seismicLineGrids", "numeric", 500, NA, NA,
+                    paste0("How many grids concomitantly should the model produce when creating ",
+                           " seismic lines? Defaults to 500. If seismic disturbance is being ",
+                           "produced over the expected amount, please provide smaller values.")),
     defineParameter(".inputFolderFireLayer", "character", Paths[["inputPath"]], NA, NA,
                     paste0("If you have the fire (i.e., rstCurrBurn) in a folder that is NOT the ",
                            "inputs folder, you can pass it here")),
@@ -121,7 +125,36 @@ defineModule(sim, list(
                            " the lines from polygons when these overlap (i.e., more likely when ",
                            " disturbanceRateRelatesToBufferedArea = TRUE). This may influence ",
                            "disturbance rate calculations as these will be double counted if FALSE).",
-                           " If DisturbanceRate is provided, this parameter is ignored."))
+                           " If DisturbanceRate is provided, this parameter is ignored.")),
+    defineParameter("useRoadsPackage", "logical", FALSE, NA, NA,
+                    paste0("FUTURE RELEASE. CURRENTLY NOT IMPLEMENTED! ",
+                           "If TRUE, uses the roads package to connect all disturbances.",
+                           " May be slow when area is too big and does NOT work with ",
+                           " generatedDisturbanceAsRaster = TRUE nor connectingBlockSize != NULL).")),
+    defineParameter("siteSelectionAsDistributing", "character", NA, NA, NA,
+                    paste0("Informs which disturbance should NOT be of type 'exhausting': exhausts ",
+                           "the area available for new disturbances sequentially, from the most to ",
+                           "the least likely. Provided classes will be used with 'distributing' ",
+                           "to probabilistically select which polygon ",
+                           " (i.e., area) the provided disturbance will fall within.",
+                           "There is speed tradeoff in using 'exhausting', ",
+                           "and 'disturbing'. While distributing is more accurate, exhausting is ",
+                           " likely a good option for uncommon (i.e., windpower), or specific ",
+                           "(i.e., forestry, mining, oil facilities) disturbances, which likely won't ",
+                           "cover the whole extent of the area. 'distributing' is slower but might be more",
+                           "realistic for disturbances which have the potential of overtaking an area ",
+                           "(i.e., seismic lines). Defaults to NA but can take any of the ",
+                           "disturbanceOrigin from the input disturbanceParameters (i.e., oilGas,",
+                           "mining, cutblocks, windTurbines, seismicLines)")),
+    defineParameter("probabilityDisturbance", "list", NULL, NA, NA,
+                    paste0("Informs to disturbances passed on siteSelectionAsDistributing ",
+                           "the probability of each specific polygon being chosen. ",
+                           "If passed, needs to be a list 2-column data.table with names 'Potential'",
+                           "and 'probPoly' with Potential matching disturbance ORIGIN from ",
+                           "disturbanceParameters and probPoly matching the probabilities for each ",
+                           "polygon (generally higher values are more likely to have disturbances ",
+                           "happening). Defaults to NULL, which is time consuming, but calculates ",
+                           "it automatically from data."))
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
@@ -203,7 +236,7 @@ defineModule(sim, list(
                                "Territories and needs to be provided if the ",
                                "study area is not in this region (i.e., union ",
                                "of BCR6 and NT1)"),
-                 sourceURL = "https://drive.google.com/file/d/1xJypz-VOA_bHN0y4GYikY25UKID_oTh_/view?usp=sharing"),
+                 sourceURL = "https://drive.google.com/file/d/1Y7_3qjq8VQ1xPdii5RMCDp2RxgQ1E-4T/view?usp=sharing"),
     expectsInput(objectName = "disturbanceDT", objectClass = "data.table", 
                  desc = paste0("This data.table needs to contain the following",
                                " columns: ",
@@ -318,6 +351,13 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
+      # Make sure siteSelectionAsDistributing is either 
+      if (!P(sim)$siteSelectionAsDistributing %in% c(NA, unique(sim$disturbanceParameters$disturbanceOrigin)))
+        stop(paste0("Only disturbances provided in disturbanceOrigin column of object ",
+                    "disturbanceParameters are accepted for parameter siteSelectionAsDistributing. ",
+                    "Please provide NA or any combination of the following: ", 
+                    paste(unique(sim$disturbanceParameters$disturbanceOrigin), collapse = ", ")
+                    ))
       
       # Make sure RTM and studyArea projections match
       sim$studyArea <- projectInputs(sim$studyArea, 
@@ -337,6 +377,20 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       }
       
       sim$currentDisturbanceLayer <- list()
+      
+      ### Make sure that growthStepEnlargingLines and growthStepEnlargingPolys are > 0
+      
+      if (P(sim)$growthStepEnlargingLines <= 0){
+        warning(paste0("growthStepEnlargingLines needs to be > 1 but is currently set to ", 
+                       P(sim)$growthStepEnlargingLines, ". Overriding it to 1"), immediate. = TRUE)
+        P(sim)$growthStepEnlargingLines <- 1
+      }
+      
+      if (P(sim)$growthStepEnlargingPolys <= 0){
+        warning(paste0("growthStepEnlargingLines needs to be > 1 but is currently set to ", 
+                       P(sim)$growthStepEnlargingPolys, ". Overriding it to 1"), immediate. = TRUE)
+        P(sim)$growthStepEnlargingPolys <- 1
+      }
       
       # schedule future event(s)
         sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingSize", eventPriority = 4)
@@ -456,6 +510,8 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        rasterToMatch = sim$rasterToMatch,
                                                        fires = mod$rstCurrentBurn,
                                                        currentDisturbanceLayer = currDis,
+                                                       siteSelectionAsDistributing = P(sim)$siteSelectionAsDistributing,
+                                                       seismicLineGrids = P(sim)$seismicLineGrids,
                                                        disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
                                                        growthStepEnlargingPolys = P(sim)$growthStepEnlargingPolys,
                                                        growthStepEnlargingLines = P(sim)$growthStepEnlargingLines,
@@ -463,7 +519,9 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        connectingBlockSize = P(sim)$connectingBlockSize,
                                                        outputsFolder = Paths[["outputPath"]],
                                                        runName = P(sim)$.runName,
-                                                       checkDisturbancesForBuffer = P(sim)$checkDisturbancesForBuffer)
+                                                       checkDisturbancesForBuffer = P(sim)$checkDisturbancesForBuffer,
+                                                       useRoadsPackage = P(sim)$useRoadsPackage,
+                                                       probabilityDisturbance = P(sim)$probabilityDisturbance)
         }
 
         sim$currentDisturbanceLayer[[paste0("Year", time(sim))]] <- mod$updatedLayers$currentDisturbanceLayer
@@ -474,8 +532,10 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
     },
     updatingDisturbanceList = {
       if (length(mod$.whichToRun) != 0){
-      sim$disturbanceList <- replaceList(disturbanceList = sim$disturbanceList, 
-                                         updatedLayers = mod$updatedLayers$individuaLayers)
+      sim$disturbanceList <- replaceListFast(disturbanceList = sim$disturbanceList,
+                                             updatedLayers = mod$updatedLayers$individuaLayers,
+                                             currentTime = time(sim),
+                                             disturbanceParameters = sim$disturbanceParameters)
       
       if (P(sim)$saveCurrentDisturbances){
         message(paste0("Saving current disturbances for year ", time(sim)))
@@ -530,9 +590,9 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                             targetFile = "disturbanceParameters.csv",
                                             destinationPath = dPath,
                                             fun = "data.table::fread",
-                                            header = TRUE, 
+                                            header = TRUE,
                                             userTags = "disturbanceParameters")
-    
+
     message(crayon::red(paste0("disturbanceParameters was not supplied. Defaulting to an example from ",
                    " Northwest Territories")))
   }
@@ -550,7 +610,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                     targetFile = "disturbanceDT.csv",
                                     destinationPath = dPath,
                                     fun = "data.table::fread",
-                                    header = TRUE, 
+                                    header = TRUE,
                                     userTags = "disturbanceDT")
     
     warning(paste0("disturbanceDT was not supplied. Defaulting to an example from ",
@@ -563,6 +623,10 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                    "calculate disturbance rates.",
                    "If other rates are desired, please provide DisturbanceRate"), 
             immediate. = TRUE)
+  }
+  
+  if (P(sim)$useRoadsPackage){
+    # Next release prep.
   }
   
   return(invisible(sim))
