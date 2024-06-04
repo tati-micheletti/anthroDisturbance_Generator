@@ -1,7 +1,6 @@
 replaceList <- function(disturbanceList, 
                         updatedLayers){
-  
- externalLays <- lapply(names(disturbanceList), function(Sector) {
+  externalLays <- lapply(names(disturbanceList), function(Sector) {
     # Layers available for updates
     upToDate <- updatedLayers[which(names(updatedLayers) == Sector)] # As I have repeated names (i.e., for 
     # energy I have 2 layers named Energy, one for windTurbines and one for powerLines), I need a 
