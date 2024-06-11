@@ -28,7 +28,7 @@ defineModule(sim, list(
   reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
                   "data.table", "PredictiveEcology/reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
-                  "fasterize", "stars", "nngeo", "tictoc"), #TODO review needed packages. Next release: "roads"
+                  "fasterize", "stars", "nngeo", "tictoc", "roads"), #TODO review needed packages.
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -127,8 +127,7 @@ defineModule(sim, list(
                            "disturbance rate calculations as these will be double counted if FALSE).",
                            " If DisturbanceRate is provided, this parameter is ignored.")),
     defineParameter("useRoadsPackage", "logical", FALSE, NA, NA,
-                    paste0("FUTURE RELEASE. CURRENTLY NOT IMPLEMENTED! ",
-                           "If TRUE, uses the roads package to connect all disturbances.",
+                    paste0("If TRUE, uses the roads package to connect all disturbances.",
                            " May be slow when area is too big and does NOT work with ",
                            " generatedDisturbanceAsRaster = TRUE nor connectingBlockSize != NULL).")),
     defineParameter("siteSelectionAsDistributing", "character", NA, NA, NA,
@@ -301,13 +300,13 @@ defineModule(sim, list(
                                "of BCR6 and NT1)"),
                  sourceURL = "https://drive.google.com/file/d/1wHIz_G088T66ygLK9i89NJGuwO3f6oIu/view?usp=sharing"),
     expectsInput(objectName = "studyArea", 
-                 objectClass = "SpatialPolygonDataFrame|vect", 
+                 objectClass = "SpatialPolygonDataFrame|spatVector", 
                  desc = paste0("Study area to which the module should be ",
                                "constrained to. Defaults to NT1+BCR6. Object ",
                                "can be of class 'vect' from terra package"), 
                  sourceURL = "https://drive.google.com/file/d/1RPfDeHujm-rUHGjmVs6oYjLKOKDF0x09/view?usp=sharing"),
     expectsInput(objectName = "rasterToMatch", 
-                 objectClass = "RasterLayer|rast", 
+                 objectClass = "RasterLayer|spatRaster", 
                  desc = paste0("All spatial outputs will be reprojected and ",
                                "resampled to it. Defaults to NT1+BCR6. Object ",
                                "can be of class 'rast' from terra package"), 
@@ -329,6 +328,10 @@ defineModule(sim, list(
                                "disturbanceType: Enlarging or Generating (see disturbanceDT object for details)",
                                "disturbanceOrigin: settlements, seismicLines, oilGas, mining, cutblocks, windTurbines",
                                "disturbanceRate: representing a % of the study area to be newly disturbed per year"),
+                 sourceURL = NA),
+    expectsInput(objectName = "DEM", 
+                 objectClass = "spatRaster", 
+                 desc = paste0(),
                  sourceURL = NA)
     ),
   outputObjects = bindrows(
@@ -626,7 +629,13 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   }
   
   if (P(sim)$useRoadsPackage){
-    # Next release prep.
+    if (!suppliedElsewhere(object = "DEM", sim = sim)){
+      sim$DEM <- NULL
+      warning(paste0("The package 'roads' requires a DEM for the study area. ",
+                     "This was not supplied but the module will try to generate one ",
+                     "using the information about the study area"), 
+              immediate. = TRUE)
+    }
   }
   
   return(invisible(sim))
