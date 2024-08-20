@@ -28,7 +28,7 @@ defineModule(sim, list(
   reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
                   "data.table", "PredictiveEcology/reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
-                  "fasterize", "stars", "nngeo", "tictoc", "roads"), #TODO review needed packages.
+                  "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm"), #TODO review needed packages.
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -128,7 +128,7 @@ defineModule(sim, list(
                            " If DisturbanceRate is provided, this parameter is ignored.")),
     defineParameter("useRoadsPackage", "logical", FALSE, NA, NA,
                     paste0("If TRUE, uses the roads package to connect all disturbances.",
-                           " May be slow when area is too big and does NOT work with ",
+                           " It is very slow when area is bigger and does NOT work with ",
                            " generatedDisturbanceAsRaster = TRUE nor connectingBlockSize != NULL).")),
     defineParameter("siteSelectionAsDistributing", "character", NA, NA, NA,
                     paste0("Informs which disturbance should NOT be of type 'exhausting': exhausts ",
@@ -153,7 +153,21 @@ defineModule(sim, list(
                            "disturbanceParameters and probPoly matching the probabilities for each ",
                            "polygon (generally higher values are more likely to have disturbances ",
                            "happening). Defaults to NULL, which is time consuming, but calculates ",
-                           "it automatically from data."))
+                           "it automatically from data.")),
+    defineParameter("maskWaterAndMountainsFromLines", "logical", TRUE, NA, NA,
+                    paste0("If TRUE, masks out steep mountain tops and water (i.e., lakes and rivers)",
+                           "from map, so linear features (i.e., transmission lines and roads) don't",
+                           "cross these")),
+    defineParameter("altitudeCut", "numeric", 550, NA, NA,
+                    paste0("If TRUE, max altitude (in meters) to mask mountain tops",
+                           "from map, so linear features (i.e., transmission lines and roads) don't",
+                           "cross these",
+                           "Only used if maskWaterAndMountainsFromLines == TRUE")),
+    defineParameter("clusterDistance", "numeric", 5000, NA, NA,
+                    paste0("Used for grouping seismic lines to identify grid characteristics ",
+                           "(i.e., lines length, distances, number of lines)",
+                           "cross these",
+                           "Only used if maskWaterAndMountainsFromLines == TRUE"))
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
@@ -331,7 +345,15 @@ defineModule(sim, list(
                  sourceURL = NA),
     expectsInput(objectName = "DEM", 
                  objectClass = "spatRaster", 
-                 desc = paste0(),
+                 desc = paste0("Elevation map of the study area. If not provided, it uses as default ",
+                               "the DEM (`elavation_30()`) from the geodata R package."),
+                 sourceURL = NA), 
+    expectsInput(objectName = "featuresToAvoid", 
+                 objectClass = "spatRaster", 
+                 desc = paste0("Raster map of the study area with areas to avoid (i.e., water, wetlands, mountain",
+                               "tops) for linear feature building (excluding seismic lines). ",
+                               "If not provided, it uses as default data from the geodata R package. ", 
+                               "Only used if maskWaterAndMountainsFromLines == TRUE"),
                  sourceURL = NA)
     ),
   outputObjects = bindrows(
@@ -524,7 +546,11 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        runName = P(sim)$.runName,
                                                        checkDisturbancesForBuffer = P(sim)$checkDisturbancesForBuffer,
                                                        useRoadsPackage = P(sim)$useRoadsPackage,
-                                                       probabilityDisturbance = P(sim)$probabilityDisturbance)
+                                                       probabilityDisturbance = P(sim)$probabilityDisturbance,
+                                                       maskWaterAndMountainsFromLines = P(sim)$maskWaterAndMountainsFromLines,
+                                                       featuresToAvoid = sim$featuresToAvoid,
+                                                       altitudeCut = P(sim)$altitudeCut,
+                                                       clusterDistance = P(sim)$clusterDistance)
         }
 
         sim$currentDisturbanceLayer[[paste0("Year", time(sim))]] <- mod$updatedLayers$currentDisturbanceLayer
@@ -633,7 +659,18 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       sim$DEM <- NULL
       warning(paste0("The package 'roads' requires a DEM for the study area. ",
                      "This was not supplied but the module will try to generate one ",
-                     "using the information about the study area"), 
+                     "using the information about the study area and the package `geodata`"), 
+              immediate. = TRUE)
+    }
+  }
+  if (P(sim)$maskWaterAndMountainsFromLines){
+    if (!suppliedElsewhere(object = "featuresToAvoid", sim = sim)){
+      sim$featuresToAvoid <- NULL
+      warning(paste0("The adjustment to road building (i.e., avoid lakes, wetlands, mountain tops, etc) ",
+                     "requires a layer for the study area. ",
+                     "This was not supplied but the module will try to generate one encompassing water",
+                     " (rivers, lakes and mountain tops) using the information about the study area", 
+                     " and the package `geodata`"), 
               immediate. = TRUE)
     }
   }

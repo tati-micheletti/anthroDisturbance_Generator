@@ -16,7 +16,11 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                  runName,
                                  useRoadsPackage,
                                  siteSelectionAsDistributing,
-                                 probabilityDisturbance){
+                                 probabilityDisturbance,
+                                 maskWaterAndMountainsFromLines,
+                                 featuresToAvoid,
+                                 altitudeCut,
+                                 clusterDistance){
   
   # Extracting layers from previous ones
   # Total study area
@@ -466,9 +470,30 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # NOTE: Although we have for the whole area, it is better to improve it with data from specific
         # the specific area we are working on.
         message("Getting the line's length, average and sd...")
-        cropLay$lengthLines <- perim(cropLay)
-        Mean <- mean(cropLay$lengthLines)
-        Sd <- sd(cropLay$lengthLines)
+        # C1. We have lots of duplicated objectids, which makes it harder later to identify lines 
+        # individually (see C2). So we need to give a new individual value for each before the 
+        # intersection
+        cropLay$individualID <- 1:NROW(cropLay)
+        cropLay <- terra::intersect(potLayTopValid, cropLay) # Takes about 20min 
+        # C2. Some lines cross potential regions, generating 2 rows (i.e., 2 different Potential values)  
+        # per OBJECTID. I should deal with this by assigning these specific lines to one of them, randomly.
+        cropLayDT <- data.table(as.data.frame(cropLay))
+        noDups <- which(!duplicated(cropLayDT$individualID))
+        cropLay <- cropLay[noDups,]
+        # Loop through the potentials, and make clusters
+        # While looping, also get the average line lengths and sds 
+        print("HERE!!!!!!!!!!!!!!!!!!")
+        browser()
+        
+        cropLayFinal <- rbind(lapply(cropLay$Potential, function(Pot){
+          cropLayInt <- clusterLines(cropLay[cropLay$Potential == Pot,], 
+                                     distThreshold = clusterDistance)
+          return(cropLayInt)
+        }))
+        
+        # cropLay$lengthLines <- perim(cropLay)
+        # Mean <- mean(cropLay$lengthLines)
+        # Sd <- sd(cropLay$lengthLines)
       }
       
       # 1. Make the iteration, and while the area is not achieved, continue 
@@ -511,120 +536,126 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # the area. Probably crashing because the area is smaller than I am asking it to make the inner buffer
         # potLayTopValidIn <- terra::buffer(potLayTopValid, width = -(Size/2))
         # potLayTopValidIn <- terra::makeValid(potLayTopValidIn)
-          if (ORIGIN == "seismicLines"){ 
-            distApropExp <- areaChosenTotal/expectedNewDisturbAreaSqM
-            if (all(!alreadyReduced, 
-                    distApropExp > 0.85)){
-              seismicLineGridsO <- seismicLineGrids
-              seismicLineGrids <- round(((seismicLineGrids*IT*(1-distApropExp))/distApropExp)/4, 0)
-              message(paste0("Total expected disturbance almost achieved, reducing the number of grids from ", 
-                             seismicLineGridsO, " to ", seismicLineGrids))
-              alreadyReduced <- TRUE
-            }
-            rs <- matrix(runif(2*seismicLineGrids, 50, 100), ncol = 2, byrow = TRUE) # For the raster below
-            if (ORIGIN %in% siteSelectionAsDistributing){
-              # 6. Select from the polygon finalPotLay the one which will have the disturbance by applying the probability
-              polyToChoose <- sample(probabilityDisturbance[[ORIGIN]][["Potential"]],
-                                     size = 1,
-                                     prob = probabilityDisturbance[[ORIGIN]][["probPoly"]])
-              currFinalPotLay <- finalPotLay[finalPotLay$Potential == polyToChoose]
-              centerPoint <- terra::spatSample(currFinalPotLay, size = seismicLineGrids, method = "random")
+          if (ORIGIN == "seismicLines"){
+            if (useClusterMethod){
+              
             } else {
-              centerPoint <- terra::spatSample(finalPotLay, size = seismicLineGrids, method = "random")              
-            }
-            while (length(centerPoint) != seismicLineGrids){
-              # If center point has less rows than size, it means that the sampling likely got all 
-              # the area possible if replace = FALSE, the default. So the missing ones need to be 
-              # added to the center point in the next best available area.
-              howManyMissing <- seismicLineGrids-length(centerPoint)
-              if (howManyMissing < 0){
+              distApropExp <- areaChosenTotal/expectedNewDisturbAreaSqM
+              if (all(!alreadyReduced, 
+                      distApropExp > 0.85)){
+                seismicLineGridsO <- seismicLineGrids
+                seismicLineGrids <- round(((seismicLineGrids*IT*(1-distApropExp))/distApropExp)/4, 0)
+                message(paste0("Total expected disturbance almost achieved, reducing the number of grids from ", 
+                               seismicLineGridsO, " to ", seismicLineGrids))
+                alreadyReduced <- TRUE
+              }
+              rs <- matrix(runif(2*seismicLineGrids, 50, 100), ncol = 2, byrow = TRUE) # For the raster below
+              if (ORIGIN %in% siteSelectionAsDistributing){
+                # 6. Select from the polygon finalPotLay the one which will have the disturbance by applying the probability
+                polyToChoose <- sample(probabilityDisturbance[[ORIGIN]][["Potential"]],
+                                       size = 1,
+                                       prob = probabilityDisturbance[[ORIGIN]][["probPoly"]])
+                currFinalPotLay <- finalPotLay[finalPotLay$Potential == polyToChoose]
+                centerPoint <- terra::spatSample(currFinalPotLay, size = seismicLineGrids, method = "random")
+              } else {
+                centerPoint <- terra::spatSample(finalPotLay, size = seismicLineGrids, method = "random")              
+              }
+              while (length(centerPoint) != seismicLineGrids){
+                # If center point has less rows than size, it means that the sampling likely got all 
+                # the area possible if replace = FALSE, the default. So the missing ones need to be 
+                # added to the center point in the next best available area.
+                howManyMissing <- seismicLineGrids-length(centerPoint)
+                if (howManyMissing < 0){
+                  message(paste0("spatSample has sampled ", length(centerPoint), " while the expected ",
+                                 "number of points was ", seismicLineGrids, ". Entering browser mode."))
+                  browser()
+                } 
                 message(paste0("spatSample has sampled ", length(centerPoint), " while the expected ",
-                               "number of points was ", seismicLineGrids, ". Entering browser mode."))
-                browser()
-              } 
-              message(paste0("spatSample has sampled ", length(centerPoint), " while the expected ",
-                             "number of points was ", seismicLineGrids, ". Choosing more points from ",
-                             "next best area..."))
-               valsToExclude <- as.numeric(unique(potLayTopValid[["Potential"]]))
-               nextBestValue <- max(setdiff(valuesAvailable, valsToExclude))
-               rowsToChoose <- which(valuesAvailable == nextBestValue)
-               potLayTopValid <- potLay[rowsToChoose]
-               # 1. UPDATING THE LAYER: 
-               cropLay <- postProcessTo(Lay, potLayTopValid)
-               cropLayBuf <- buffer(cropLay, width = 50)
-               cropLayAg <- aggregate(cropLayBuf, dissolve = TRUE)
-               finalPotLay <- erase(potLayTopValid, cropLayAg)
-               centerPointToAdd <- terra::spatSample(finalPotLay, size = howManyMissing, method = "random")
-               centerPoint <- rbind(centerPoint, centerPointToAdd)
-            }
-            # 5. Draw the new grid based on the total length expected
-            # 5.1. Draw a square based on the centerPoint, where the distance from point to the lines 
-            # is the diagonal of a square of the lineLenght you want.
-            lineLength <- rtnorm(length(centerPoint), Mean, Sd, lower = 0)
-            # 5.2. Make a square polygon with the center point and the distance
-            gridReady <- lapply(1:seismicLineGrids, function(ROW){
-             pnt <- vect(matrix(c(xmin(centerPoint[ROW,])-(lineLength[ROW]/2), ymin(centerPoint[ROW,]),
-                            xmin(centerPoint[ROW,])+(lineLength[ROW]/2), ymin(centerPoint[ROW,]),
-                            xmin(centerPoint[ROW,]), ymin(centerPoint[ROW,])+(lineLength[ROW]/2),
-                            xmin(centerPoint[ROW,]), ymin(centerPoint[ROW,])-(lineLength[ROW]/2)), 
-                          ncol = 2, byrow = TRUE), type="points", crs=crs(centerPoint[ROW,]))
-             polyArea <- as.polygons(pnt, extent=TRUE)
-             # 5.3. Create a raster with the desired distance between the points
-             polRas <- tryCatch(rast(polyArea, resolution = rs[ROW,]), error = function(e) browser())
-              # To points: This is now a vector
-              gridPoints <- suppressWarnings(as.points(polRas, na.rm = TRUE))
-              # Now I need to find the first and last dots to connect
-              # Rows: 
-              # NOTE: We can tilt by simply choosing different end points!!
-              rowsOfPointsL <- lapply(0:(dim(polRas)[2]-1), function(rowIndex){
-                thePair <- c(1, (ncell(polRas)-(dim(polRas)[2]-1)))+rowIndex
-                # create the line based on the points by extracting the points based on thePair 
-                theLine <- as.lines(gridPoints[thePair, ])
-                return(theLine)
-              })
-              rowsOfPoints <- do.call(rbind, rowsOfPointsL)
-              # Cols:
-              colsOfPointsL <- lapply(0:(dim(polRas)[1]-1), function(colIndex){
-                thePair <- c(1, dim(polRas)[2])+(colIndex*dim(polRas)[2])
-                # create the line based on the points by extracting the points based on thePair 
-                theLine <- as.lines(gridPoints[thePair, ])
-                return(theLine)
-              })
-              colsOfPoints <- do.call(rbind, colsOfPointsL)
-              # Now we do 0 to two random crossing lines
-              howManyCross <- sample(x = seq(0, 2), size = 1)
-              if (howManyCross > 0){
-                # Find all points that are in each edge
-                up <- c(1:dim(polRas)[2])
-                bottom <- c((ncell(polRas)-(dim(polRas)[2]-1)):ncell(polRas))
-                left <- NULL
-                for (i in 0:(dim(polRas)[1]-1)){
-                  left <- c(left, 1+(i*dim(polRas)[2]))
-                }
-                right <- left + (dim(polRas)[2]-1)
-                allDirs <- c("up", "bottom", "left", "right")
-                crossLines <- lapply(1:howManyCross, function(tms){
-                  dir1 <- sample(x = allDirs, 1)
-                  dir2 <- sample(setdiff(allDirs, dir1), 1)
-                  thePair <- c(sample(get(dir1), 1), sample(get(dir2), 1))
+                               "number of points was ", seismicLineGrids, ". Choosing more points from ",
+                               "next best area..."))
+                valsToExclude <- as.numeric(unique(potLayTopValid[["Potential"]]))
+                nextBestValue <- max(setdiff(valuesAvailable, valsToExclude))
+                rowsToChoose <- which(valuesAvailable == nextBestValue)
+                potLayTopValid <- potLay[rowsToChoose]
+                # 1. UPDATING THE LAYER: 
+                cropLay <- postProcessTo(Lay, potLayTopValid)
+                cropLayBuf <- buffer(cropLay, width = 50)
+                cropLayAg <- aggregate(cropLayBuf, dissolve = TRUE)
+                finalPotLay <- erase(potLayTopValid, cropLayAg)
+                centerPointToAdd <- terra::spatSample(finalPotLay, size = howManyMissing, method = "random")
+                centerPoint <- rbind(centerPoint, centerPointToAdd)
+              }
+              # 5. Draw the new grid based on the total length expected
+              # 5.1. Draw a square based on the centerPoint, where the distance from point to the lines 
+              # is the diagonal of a square of the lineLenght you want.
+              
+              browser() # HERE is where Mean and SD is used from cropLay
+              lineLength <- rtnorm(length(centerPoint), Mean, Sd, lower = 0)
+              # 5.2. Make a square polygon with the center point and the distance
+              gridReady <- lapply(1:seismicLineGrids, function(ROW){
+                pnt <- vect(matrix(c(xmin(centerPoint[ROW,])-(lineLength[ROW]/2), ymin(centerPoint[ROW,]),
+                                     xmin(centerPoint[ROW,])+(lineLength[ROW]/2), ymin(centerPoint[ROW,]),
+                                     xmin(centerPoint[ROW,]), ymin(centerPoint[ROW,])+(lineLength[ROW]/2),
+                                     xmin(centerPoint[ROW,]), ymin(centerPoint[ROW,])-(lineLength[ROW]/2)), 
+                                   ncol = 2, byrow = TRUE), type="points", crs=crs(centerPoint[ROW,]))
+                polyArea <- as.polygons(pnt, extent=TRUE)
+                # 5.3. Create a raster with the desired distance between the points
+                polRas <- tryCatch(rast(polyArea, resolution = rs[ROW,]), error = function(e) browser())
+                # To points: This is now a vector
+                gridPoints <- suppressWarnings(as.points(polRas, na.rm = TRUE))
+                # Now I need to find the first and last dots to connect
+                # Rows: 
+                # NOTE: We can tilt by simply choosing different end points!!
+                rowsOfPointsL <- lapply(0:(dim(polRas)[2]-1), function(rowIndex){
+                  thePair <- c(1, (ncell(polRas)-(dim(polRas)[2]-1)))+rowIndex
                   # create the line based on the points by extracting the points based on thePair 
                   theLine <- as.lines(gridPoints[thePair, ])
                   return(theLine)
                 })
-                crossedLines <- do.call(rbind, crossLines)
-              } else {
-                crossedLines <- howManyCross <- NULL
-              }
-              gridReady <- do.call(rbind, list(rowsOfPoints, colsOfPoints, crossedLines))# Is the newly created grid
-              return(gridReady)
-            })
-            gridReadyB <- do.call(rbind, gridReady)
-            # newDist NEEDS to be buffered, first by 3m and then by by 500m, if disturbanceRateRelatesToBufferedArea 
-            # Although dParOri[["resolutionVector"]] has vector resolution, seismic lines are much slimmer.
-            # In the past, they used to be placed 300–500 m apart, and 5–10 m wide. 
-            # Nowadays, the average is 3m wide (2-4, usually not more than 5.5m) and about 50–100m apart 
-            # (Dabros et al., 2018 - DOI: 10.1139/er-2017-0080)
-            newDist <- terra::buffer(gridReadyB, width = 3)
+                rowsOfPoints <- do.call(rbind, rowsOfPointsL)
+                # Cols:
+                colsOfPointsL <- lapply(0:(dim(polRas)[1]-1), function(colIndex){
+                  thePair <- c(1, dim(polRas)[2])+(colIndex*dim(polRas)[2])
+                  # create the line based on the points by extracting the points based on thePair 
+                  theLine <- as.lines(gridPoints[thePair, ])
+                  return(theLine)
+                })
+                colsOfPoints <- do.call(rbind, colsOfPointsL)
+                # Now we do 0 to two random crossing lines
+                howManyCross <- sample(x = seq(0, 2), size = 1)
+                if (howManyCross > 0){
+                  # Find all points that are in each edge
+                  up <- c(1:dim(polRas)[2])
+                  bottom <- c((ncell(polRas)-(dim(polRas)[2]-1)):ncell(polRas))
+                  left <- NULL
+                  for (i in 0:(dim(polRas)[1]-1)){
+                    left <- c(left, 1+(i*dim(polRas)[2]))
+                  }
+                  right <- left + (dim(polRas)[2]-1)
+                  allDirs <- c("up", "bottom", "left", "right")
+                  crossLines <- lapply(1:howManyCross, function(tms){
+                    dir1 <- sample(x = allDirs, 1)
+                    dir2 <- sample(setdiff(allDirs, dir1), 1)
+                    thePair <- c(sample(get(dir1), 1), sample(get(dir2), 1))
+                    # create the line based on the points by extracting the points based on thePair 
+                    theLine <- as.lines(gridPoints[thePair, ])
+                    return(theLine)
+                  })
+                  crossedLines <- do.call(rbind, crossLines)
+                } else {
+                  crossedLines <- howManyCross <- NULL
+                }
+                gridReady <- do.call(rbind, list(rowsOfPoints, colsOfPoints, crossedLines))# Is the newly created grid
+                return(gridReady)
+              })
+              gridReadyB <- do.call(rbind, gridReady)
+              # newDist NEEDS to be buffered, first by 3m and then by by 500m, if disturbanceRateRelatesToBufferedArea 
+              # Although dParOri[["resolutionVector"]] has vector resolution, seismic lines are much slimmer.
+              # In the past, they used to be placed 300–500 m apart, and 5–10 m wide. 
+              # Nowadays, the average is 3m wide (2-4, usually not more than 5.5m) and about 50–100m apart 
+              # (Dabros et al., 2018 - DOI: 10.1139/er-2017-0080)
+              newDist <- terra::buffer(gridReadyB, width = 3)
+            }
           } else {
             # Get a point within the layer:
             if (ORIGIN %in% siteSelectionAsDistributing){
@@ -862,11 +893,57 @@ generateDisturbancesShp <- function(disturbanceParameters,
         endLay <- rbind(endLay, connectedOne)
       }          
     } else {
-      
-      # HERE COMES THE roads PACKAGE!!! Need to create `connected`!
+      if (any(useRoadsPackage, maskWaterAndMountainsFromLines)){
+        Require("geodata")
+        DEMraw <- elevation_30s(country = "CAN", path = Paths[["inputPath"]])
+        DEM <- postProcessTo(from = DEMraw, to = rasterToMatch, cropTo = studyArea, 
+                             projectTo = rasterToMatch, maskTo = studyArea, 
+                             writeTo = file.path(Paths[["inputPath"]], 
+                                                 paste0("DEM_", 
+                                                        reproducible::.robustDigest(studyArea))))
+      }
       if (useRoadsPackage){
-        browser()
+        # Need to create `connected`
+        # But roads package is SUPER slow... 
+        tic("Time Elapsed for Road Building: ")
+        connected <- projectRoads(landings = st_as_sf(oriLayVect), # points (works with lines?) where to join to the roads (landings)
+                                weightRaster = DEM,     # raster with zeros on roads and "weight" (DEM?)
+                                roads = st_as_sf(endLay),  #an existing road network as lines
+                                plotRoads = TRUE,
+                                roadsInWeight = FALSE) 
+        toc()
       } else {
+        if (maskWaterAndMountainsFromLines){
+          if (is.null(featuresToAvoid)){
+            message(paste0("Features to avoid (i.e., lakes, rivers, wetland and mountain tops higher than ",
+                           altitudeCut,"m) is NULL.",
+                           "The module will create those."))
+            # Alternative to roads package:
+            # # TRY IMPLEMENTING A VERSION OF THE LINES WHICH AVOID CERTAIN POLYGONS?
+            # # THEN I CAN MAKE RIVERS, LAKES, WETLAND AND HIGH MOUNTAIN DISAPPEAR FROM THE MAP, 
+            # AND THUS BE AVOIDED BY LINES BUILDING
+            waterraw <- landcover("water", path = Paths[["inputPath"]])
+            water <- postProcessTo(from = waterraw, to = rasterToMatch, cropTo = studyArea, 
+                                   projectTo = rasterToMatch, maskTo = studyArea, 
+                                   writeTo = file.path(Paths[["inputPath"]], 
+                                                       paste0("water_", 
+                                                              reproducible::.robustDigest(studyArea))))
+            wetlandsraw <- landcover("wetland", path = Paths[["inputPath"]])
+            wet <- postProcessTo(from = wetlandsraw, to = rasterToMatch, cropTo = studyArea, 
+                                 projectTo = rasterToMatch, maskTo = studyArea, 
+                                 writeTo = file.path(Paths[["inputPath"]], 
+                                                     paste0("wet_", 
+                                                            reproducible::.robustDigest(studyArea))))
+            # Now we put all layers together and exclude the pixels for building the roads (but without modifying the final maps!)
+            DEM[DEM[] < altitudeCut] <- 0
+            DEM[DEM[] >= altitudeCut] <- 1
+            DEM[wet[] > 0.8] <- 1
+            DEM[water[] > 0.8] <- 1
+            featuresToAvoid <- copy(DEM)
+            featuresToAvoid[featuresToAvoid == 0] <- NA
+            featuresToAvoid[is.na(rasterToMatch)] <- 1
+          }
+        }
         # Here comes what is below...
         for (i in 1:NROW(oriLayVect)){
           if(i%%100==0)
@@ -887,10 +964,36 @@ generateDisturbancesShp <- function(disturbanceParameters,
             print("oriLayVect extent is NA. Fix didn't work. Debug.")
             browser()
           } 
-          connectedOne <- terra::nearest(oriLayVect[i, ], endLay, 
-                                         pairs = FALSE, 
-                                         centroids = TRUE, 
-                                         lines = TRUE)
+          if (maskWaterAndMountainsFromLines){
+            Require::Require("spaths")
+            px <- extract(rasterToMatch, ext(oriLayVect[i, ]), cells = TRUE)
+            oRas <- copy(rasterToMatch)
+            oRas[] <- 0
+            oRas[px[["cell"]]] <- 1
+            cEndLay <- terra::nearest(oriLayVect[i, ], endLay, 
+                                           pairs = FALSE, 
+                                           centroids = TRUE, 
+                                           lines = FALSE)
+            message(paste0("Finding shortest path for feature ", i, " of ", NROW(oriLayVect),
+                           ": ", 100*round(i/NROW(oriLayVect), 4),"% of ", 
+                           Sector," (",disturbanceOrigin,
+                           ") for year ", currentTime))
+            connectedOne <- spaths::shortest_paths(rst = oRas, origins = oriLayVect[i, ],
+                                           destinations = cEndLay,
+                                           update_rst = as.polygons(featuresToAvoid), 
+                                           output = "lines", show_progress = FALSE)
+            # message("***** END Finding shortest paths *******")
+            connectedOne <- connectedOne[connectedOne$layer > 0,]
+          } else {
+            message(paste0("Connecting feature ", i, " of ", NROW(oriLayVect),
+                           ": ", 100*round(i/NROW(oriLayVect), 4),"% of ", 
+                           Sector," (",disturbanceOrigin,
+                           ") for year ", currentTime))
+            connectedOne <- terra::nearest(oriLayVect[i, ], endLay, 
+                                           pairs = FALSE, 
+                                           centroids = TRUE, 
+                                           lines = TRUE)
+          }
           # 4. Update the endLayer with the new connection
           if (!is(connectedOne, "SpatVector"))
             connectedOne <- terra::vect(connectedOne)
