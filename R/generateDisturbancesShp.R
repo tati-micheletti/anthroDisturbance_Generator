@@ -4,6 +4,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                  studyArea,
                                  fires,
                                  currentTime,
+                                 firstTime,
                                  growthStepGenerating,
                                  growthStepEnlargingPolys,
                                  growthStepEnlargingLines,
@@ -20,7 +21,11 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                  maskWaterAndMountainsFromLines,
                                  featuresToAvoid,
                                  altitudeCut,
-                                 clusterDistance){
+                                 clusterDistance,
+                                 distanceNewLinesFactor,
+                                 runClusteringInParallel,
+                                 useClusterMethod,
+                                 refinedStructure){
   
   # Extracting layers from previous ones
   # Total study area
@@ -399,7 +404,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
         potLayTop <- potLay[rowsToChoose]
         # Now exclude where disturbance already exists
         # Use intersect to see if they overlap.
-        message(paste0("Intersecting existing disturbances with potential for development for ",
+        if (!ORIGIN == "seismicLines") # For seismic lines, intersection happens below
+          message(paste0("Intersecting existing disturbances with potential for development for ",
                        Sector, " -- ", ORIGIN))
         if (Sector == "forestry"){
           croppedAllLays <- reproducible::cropInputs(allLays, potLayTop)
@@ -459,42 +465,18 @@ generateDisturbancesShp <- function(disturbanceParameters,
       # generate the disturnances. And we don't want to repeat this every time inside
       # a while loop, as it doesn't change, so we do it outside
       if (ORIGIN == "seismicLines"){
-        # 1. Crop and mask the seismicLines layer to the actual most probable area (potLayTopValid)
-        cropLay <- postProcessTo(Lay, potLayTopValid)
-        # 2. Convert all lines to polygons to exclude them from selecting the random point
-        # DOUBLE CHECK I CAN'T MAKE POLYGONS OUT OF THE LINES USING extent=TRUE!
-        cropLayBuf <- buffer(cropLay, width = 50)
-        cropLayAg <- aggregate(cropLayBuf, dissolve = TRUE)
-        finalPotLay <- erase(potLayTopValid, cropLayAg)
-        # 4. Calculate the total length of lines in the "chosen area", their mean and sd 
-        # NOTE: Although we have for the whole area, it is better to improve it with data from specific
-        # the specific area we are working on.
-        message("Getting the line's length, average and sd...")
-        # C1. We have lots of duplicated objectids, which makes it harder later to identify lines 
-        # individually (see C2). So we need to give a new individual value for each before the 
-        # intersection
-        cropLay$individualID <- 1:NROW(cropLay)
-        cropLay <- terra::intersect(potLayTopValid, cropLay) # Takes about 20min 
-        # C2. Some lines cross potential regions, generating 2 rows (i.e., 2 different Potential values)  
-        # per OBJECTID. I should deal with this by assigning these specific lines to one of them, randomly.
-        cropLayDT <- data.table(as.data.frame(cropLay))
-        noDups <- which(!duplicated(cropLayDT$individualID))
-        cropLay <- cropLay[noDups,]
-        # Loop through the potentials, and make clusters
-        # While looping, also get the average line lengths and sds 
-        print("HERE!!!!!!!!!!!!!!!!!!")
-        browser()
-        
-        cropLayFinal <- rbind(lapply(cropLay$Potential, function(Pot){
-          cropLayInt <- clusterLines(cropLay[cropLay$Potential == Pot,], 
-                                     distThreshold = clusterDistance)
-          return(cropLayInt)
-        }))
-        
-        # cropLay$lengthLines <- perim(cropLay)
-        # Mean <- mean(cropLay$lengthLines)
-        # Sd <- sd(cropLay$lengthLines)
+        if (firstTime){
+          cropLayFinal <- Cache(createCropLayFinalYear1, Lay = Lay, 
+                                                  potLayTopValid = potLayTopValid, 
+                                                  runClusteringInParallel = runClusteringInParallel, 
+                                                  clusterDistance = clusterDistance)
+          terra::writeVector(x = cropLayFinal, 
+                             filename = file.path(outputsFolder, paste0("seismicLinesYear", currentTime, ".shp")),
+                             overwrite = TRUE)
+        } else {
+          cropLayFinal <- Lay
       }
+}
       
       # 1. Make the iteration, and while the area is not achieved, continue 
       areaChosenTotal <- 0
@@ -539,6 +521,65 @@ generateDisturbancesShp <- function(disturbanceParameters,
           if (ORIGIN == "seismicLines"){
             if (useClusterMethod){
               
+              # NOTES: Seismic lines, because we don't connect these, can reach close the specified information
+              # on total amount of disturbance. However, the lines created are RANDOM and NOT exactly as the 
+              # existing ones, so we still need to do it iteratively.
+              
+              # Here I need to think about a way to assess how much each cluster represents in the total needed area
+              # expectedNewDisturbAreaSqM so I can randomly choose, with higher probability in better areas 
+              # clusters to be duplicated. This duplication will then get VERY close to the expected area,
+              # likely slightly below (as not many lines overlap) --> The smaller the buffer 
+              # (clusterDistance and distanceNewLinesFactor) new lines will be closer 
+
+              if (geomtype(cropLayFinal) != "lines"){
+              print("cropLayFinal needs to be lines and needs to have all previous lines")
+                browser()
+                }
+              
+              # 0. Calculate the area of each line buffered by 3m (min width in the field)
+              cropLayFinal$buff3mAreaM2 <- expanse(buffer(x = cropLayFinal, width = 3))
+              
+              # 1. Add a column in how much each cluster represents in the total in m2 -- not by individual line!
+              cropLayFinalDT <- as.data.table(as.data.frame(cropLayFinal))
+              cropLayFinalDT[, sumBuff3mAreaM2 := sum(buff3mAreaM2), by = "Pot_Clus"] 
+              # Need to do by potential as for each potential, cluster numbers are repeated
+              totalBuff3mArea <- sum(cropLayFinalDT$buff3mArea)
+              cropLayFinalDT[, PercBuff3mAreaOfTotalM2 := 100*(sumBuff3mAreaM2/totalBuff3mArea),  by = "Pot_Clus"]
+              if (sum(unique(cropLayFinalDT[, c("Pot_Clus","PercBuff3mAreaOfTotalM2")]$PercBuff3mAreaOfTotalM2)) != 100){ 
+                message(paste0("Total contribution of clusters in total area is higher than 100%.",
+                               "Something may be wrong. Entering debug mode."))
+                browser()
+                } # TODO test
+              # 2. Choose randomly clusters (with different probabilities) that sum to the total expected new. 
+              # sumBuff3mAreaM2 --> by cluster
+              # PercBuff3mAreaOfTotalM2 --> representation if each cluster over the total
+              # Potential --> Represents the highest potential for being chosen.
+              # --> Draw for all potentials, the probability a cluster within these will be chosen (higher potential, higher chances)
+              # Normalize probabilities to sum to 1
+              probabilities <- unique(cropLayFinalDT$Potential) / sum(unique(cropLayFinalDT$Potential))
+              sampledClusters <- sample(unique(cropLayFinalDT$Potential), 
+                                          size = growthStepEnlargingLines*1000, 
+                                          replace = TRUE, 
+                                          prob = probabilities)
+                selectedClusters <- NULL
+                for (uniqueSampClus in unique(sampledClusters)){
+                  toChoseFrom <- unique(cropLayFinalDT[Potential == sampledClusters[uniqueSampClus], Pot_Clus])
+                  howManyINeed <- sum(sampledClusters == uniqueSampClus)
+                  selectedClusters <- c(selectedClusters, 
+                                        sample(toChoseFrom, 
+                                               replace = TRUE,
+                                               size = howManyINeed))
+                }              
+              #TODO Here I can parallelize using future!
+                newLines <- simulateLines(Lines = cropLayFinal[cropLayFinal$Pot_Clus %in% selectedClusters, ],
+                                          distThreshold = clusterDistance,
+                                          distNewLinesFact = distanceNewLinesFactor,
+                                          refinedStructure = refinedStructure)
+
+              # newDist NEEDS to be buffered, first by 3m and then (happening below in the code) by 
+              # 500m, if 
+              # disturbanceRateRelatesToBufferedArea 
+              newDist <- terra::buffer(newLines, width = 3) # THIS IS WHAT I NEED IN THE END HERE!
             } else {
               distApropExp <- areaChosenTotal/expectedNewDisturbAreaSqM
               if (all(!alreadyReduced, 
@@ -589,7 +630,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
               # 5.1. Draw a square based on the centerPoint, where the distance from point to the lines 
               # is the diagonal of a square of the lineLenght you want.
               
-              browser() # HERE is where Mean and SD is used from cropLay
+              print("Currently not using, but should test! Something is likely not working")
+              # browser() # HERE is where Mean and SD is used from cropLay
               lineLength <- rtnorm(length(centerPoint), Mean, Sd, lower = 0)
               # 5.2. Make a square polygon with the center point and the distance
               gridReady <- lapply(1:seismicLineGrids, function(ROW){
@@ -699,6 +741,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
               }
             }
           }
+          
         if (disturbanceRateRelatesToBufferedArea){
           newDistBuff <- terra::buffer(newDist, width = 500) 
           if (nrow(newDistBuff) > 1){
@@ -720,6 +763,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
             }
             newDist <- newDistBuf
           }
+          
+          if (ORIGIN == "seismicLines"){
+            # Crop again because are being simulated out of SA
+            newDist <- reproducible::postProcess(newLines, studyArea)
+          }
+          
           if (IT == 1){
             newDisturbs <- newDist
             } else {
@@ -749,8 +798,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
           file = file.path(Paths[["outputPath"]], paste0("PercentageDisturbances_", currentTime, 
                                                          "_", runName, ".txt")),
           append = TRUE, sep = "\n")
-      
-      
+
       return(newDisturbs)
     })
     names(updatedL) <- whichOrigin
@@ -1061,7 +1109,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
   
   # Put all updated layers in a list to return
   individuaLayers <- c(Enlarged, Generated, Connected)
-  
+
   # Now merge all disturbances (raster format) to avoid creating new disturbances where it has 
   # already been disturbed
   
@@ -1113,8 +1161,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
   
   # individualLayers: mixed rasters and vectors, coming directly from the disturbances generated
   
-  # curDistRas: all vectors, unbuffered new disturbances, no old ones here except for seismic lines and settlements
-  #             While seismic lines are not lines anymore (they got buffered to increase the disturbance), we still have lines
+  # curDistRas: all vectors, unbuffered new disturbances, no old ones here except for seismic lines (if enlarging) and settlements
+  #             While seismic lines are not lines anymore (they got buffered to match real width), we still have lines
   #             belonging to roads and pipelines.     
   
   ########################### FINAL LAYERS ###########################
@@ -1123,7 +1171,10 @@ generateDisturbancesShp <- function(disturbanceParameters,
   # returned!!
   
   if (all(disturbanceRateRelatesToBufferedArea,
-          checkDisturbancesForBuffer)){
+          checkDisturbancesForBuffer)){ 
+    #TODO I don't think this is working. New disturbances appear as much smaller than the original ones. 
+    # Maybe some disturbances (i.e., seismic lines) in the new layer are not including the existing "old"  
+    # layer? I am pretty sure that this is the problem... We should fix this!
     curDistVcs <- unlist(curDistRas)
     
     curDistVcsAll <- lapply(names(curDistVcs), function(eachVectNm){
@@ -1162,7 +1213,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
   }
   
   ### RETURN!
-  
+  if (firstTime){
+    seismicLinesFirstYear <- vect(file.path(outputsFolder, paste0("seismicLinesYear", currentTime, ".shp")))
+  } else {
+    seismicLinesFirstYear <- NULL
+  }
   list(individuaLayers = individuaLayers, 
-       currentDisturbanceLayer = curDistRas)
+       currentDisturbanceLayer = curDistRas,
+       seismicLinesFirstYear = seismicLinesFirstYear)
 }

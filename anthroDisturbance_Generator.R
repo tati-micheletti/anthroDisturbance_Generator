@@ -28,7 +28,8 @@ defineModule(sim, list(
   reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
                   "data.table", "PredictiveEcology/reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
-                  "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm"), #TODO review needed packages.
+                  "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm",
+                  "foreach", "doParallel"), #TODO review needed packages.
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -163,11 +164,35 @@ defineModule(sim, list(
                            "from map, so linear features (i.e., transmission lines and roads) don't",
                            "cross these",
                            "Only used if maskWaterAndMountainsFromLines == TRUE")),
-    defineParameter("clusterDistance", "numeric", 5000, NA, NA,
+    defineParameter("clusterDistance", "numeric", 10000, NA, NA,
                     paste0("Used for grouping seismic lines to identify grid characteristics ",
                            "(i.e., lines length, distances, number of lines)",
-                           "cross these",
-                           "Only used if maskWaterAndMountainsFromLines == TRUE"))
+                           "Increasing this number likely speeds up the simulation, but ",
+                           "may have some compromising with accuracy. ",
+                           "Reducing the number also makes seismic lines closer to each other",
+                           "Only used if useClusterMethod = TRUE")),
+    defineParameter("distanceNewLinesFactor", "numeric", 1.5, NA, NA,
+                    paste0("Used for getting distance threshold for new lines from a center point.",
+                           "The higher, the more distant the lines are allowed to be. It is a ",
+                           "factor of clusterDistance",
+                           "(i.e., clusterDistance * distanceNewLinesFactor = max distance)",
+                           "Reducing the number also makes seismic lines closer to each other",
+                           "Only used if useClusterMethod = TRUE")),
+    defineParameter("useClusterMethod", "logical", TRUE, NA, NA,
+                    paste0("If want to use clusters to identify seismic lines grouping, TRUE.",
+                           "This alternative generates lines more similar to satellite data, ",
+                           "although attention needs to be paid to the fact that satellite data ",
+                           "for seismic lines is flawed (i.e., misses a lot of lines due to ",
+                           "resolution)")),
+    defineParameter("runClusteringInParallel", "logical", FALSE, NA, NA,
+                    paste0("If TRUE, runs clusters' analysis in parallel (within the most internal ",
+                           "for loop). This may be slower depending on amount of data")),
+    defineParameter("refinedStructure", "logical", FALSE, NA, NA,
+                    paste0("If TRUE, it tries to copy the structure of the line clusters ",
+                           "for seismic lines (if useClusterMethod = TRUE). While this slows down ",
+                           "runtime, the final linear structure is generated very similarly (but",
+                           "with randomness to the structure of original lines in terms of number ",
+                           "of parallel and perpendicular lines."))
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
@@ -480,14 +505,20 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       # Check if the time(sim) is within the interval to run the disturbances
       mod$.whichToRun <- if (all(!P(sim)$disturbFirstYear,
                                  time(sim) == start(sim))){
+        mod$.firstYear <- NA
         NULL
       } else {
+        if (is.na(mod$.firstYear)){
+          mod$.firstYear <- TRUE 
+          message(paste0("First year of running disturbances: ", time(sim)))
+        } else {
+          mod$.firstYear <- FALSE
+        }
         whichDisturbancesToGenerate(startTime = start(sim),
                                     currentTime = time(sim),
                                     endTime = end(sim),
                                     disturbanceParameters = sim$disturbanceParameters)
       }
-      
       if (length(mod$.whichToRun) != 0){ # If anything is scheduled
         forestryScheduled <- "forestry" %in% sim$disturbanceParameters[mod$.whichToRun, dataName]
         if (forestryScheduled) { # forestry scheduled?
@@ -532,6 +563,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        disturbanceList = sim$disturbanceList,
                                                        currentTime = time(sim),
                                                        studyArea = sim$studyArea,
+                                                       firstTime = mod$.firstYear,
                                                        rasterToMatch = sim$rasterToMatch,
                                                        fires = mod$rstCurrentBurn,
                                                        currentDisturbanceLayer = currDis,
@@ -550,7 +582,11 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        maskWaterAndMountainsFromLines = P(sim)$maskWaterAndMountainsFromLines,
                                                        featuresToAvoid = sim$featuresToAvoid,
                                                        altitudeCut = P(sim)$altitudeCut,
-                                                       clusterDistance = P(sim)$clusterDistance)
+                                                       clusterDistance = P(sim)$clusterDistance,
+                                                       distanceNewLinesFactor = P(sim)$distanceNewLinesFactor,
+                                                       useClusterMethod = P(sim)$useClusterMethod,
+                                                       runClusteringInParallel = P(sim)$runClusteringInParallel,
+                                                       refinedStructure = P(sim)$refinedStructure)
         }
 
         sim$currentDisturbanceLayer[[paste0("Year", time(sim))]] <- mod$updatedLayers$currentDisturbanceLayer
@@ -562,7 +598,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
     updatingDisturbanceList = {
       if (length(mod$.whichToRun) != 0){
       sim$disturbanceList <- replaceListFast(disturbanceList = sim$disturbanceList,
-                                             updatedLayers = mod$updatedLayers$individuaLayers,
+                                             updatedLayersAll = mod$updatedLayers,
                                              currentTime = time(sim),
                                              disturbanceParameters = sim$disturbanceParameters)
       

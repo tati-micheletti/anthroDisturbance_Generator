@@ -1,8 +1,9 @@
 replaceListFast <- function(disturbanceList, 
-                        updatedLayers, 
+                        updatedLayersAll, 
                         currentTime,
                         disturbanceParameters){
   
+  updatedLayers <- updatedLayersAll$individuaLayers
   correctMatching <- match(names(updatedLayers), names(disturbanceList))
   
   externalLays <- lapply(unique(sort(correctMatching)), function(INDEX) {
@@ -56,7 +57,14 @@ replaceListFast <- function(disturbanceList,
           return(currDist)
         }
         # Currently disturbed 
-        pastDist <- disturbanceList[[INDEX]][[layName]]
+        if (all(Sector == "oilGas",
+                layName == "seismicLines",
+                !is.null(updatedLayersAll$seismicLinesFirstYear))) {
+          pastDist <- updatedLayersAll$seismicLinesFirstYear
+          
+        } else {
+          pastDist <- disturbanceList[[INDEX]][[layName]]
+        }
         if (all(!is.null(pastDist),
                 !"createdInSimulationTime" %in% names(pastDist),
                 is(pastDist, "SpatVector")))
