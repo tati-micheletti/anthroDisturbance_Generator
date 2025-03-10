@@ -483,26 +483,27 @@ generateDisturbancesShp <- function(disturbanceParameters,
       IT <- 1
       newDisturbs <- NULL
       alreadyReduced <- FALSE
-      while (areaChosenTotal < expectedNewDisturbAreaSqM){
-        if (IT %in% 1:10){
-          message(paste0("Calculating total generated disturbance size for ", Sector, " for ", 
-                         ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
-                         round(100*(round(areaChosenTotal, 0)/round(expectedNewDisturbAreaSqM, 0)), 2),"% achieved)"))
-        }
-        if (IT %% 10 == 0){
-          message(paste0("Calculating total generated disturbance size for ", Sector, " for ",  
-                         ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
-                         round(100*(round(areaChosenTotal, 0)/round(expectedNewDisturbAreaSqM, 0)), 2),"% achieved)"))
-        }
-        # 1.1. Get each disturbance's size. If the expected disturbance is smaller than the 
-        # normal size, we only disturb what is expected
+      
+        while (areaChosenTotal < expectedNewDisturbAreaSqM){
+          if (IT %in% 1:10){
+            message(paste0("Calculating total generated disturbance size for ", Sector, " for ", 
+                           ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
+                           round(100*(round(areaChosenTotal, 0)/round(expectedNewDisturbAreaSqM, 0)), 2),"% achieved)"))
+          }
+          if (IT %% 10 == 0){
+            message(paste0("Calculating total generated disturbance size for ", Sector, " for ",  
+                           ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
+                           round(100*(round(areaChosenTotal, 0)/round(expectedNewDisturbAreaSqM, 0)), 2),"% achieved)"))
+          }
+          # 1.1. Get each disturbance's size. If the expected disturbance is smaller than the 
+          # normal size, we only disturb what is expected
           Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
-        # If the Size is larger than expectedNewDisturbAreaSqM, we might first make a probability of 
-        # the disturbance happening. 
-        if (Size > expectedNewDisturbAreaSqM){
-          p <- rbinom(1, size = 1, prob = (expectedNewDisturbAreaSqM/Size))
-          disturbanceHappening <- if (p == 1) TRUE else FALSE
-        } else disturbanceHappening <- TRUE
+          # If the Size is larger than expectedNewDisturbAreaSqM, we might first make a probability of 
+          # the disturbance happening. 
+          if (Size > expectedNewDisturbAreaSqM){
+            p <- rbinom(1, size = 1, prob = (expectedNewDisturbAreaSqM/Size))
+            disturbanceHappening <- if (p == 1) TRUE else FALSE
+          } else disturbanceHappening <- TRUE
           # If the disturbance doesn't happen:
           if (!disturbanceHappening){
             message(paste0("Rate of disturbance for ", ORIGIN, " is very small and the probability of ",
@@ -510,14 +511,14 @@ generateDisturbancesShp <- function(disturbanceParameters,
                            " Returning layer without disturbances."))
             next
           }
-       # 1.3. Once the best places are chosen, we place the disturbance in a new layer, which will 
-        # have to be updated until we leave the while loop
-        # Make an inner buffer with the half of the size of the Size to make sure we have the full 
-        # new disturbance within the area designated! 
-        # UPDATE: I can't do this as it is crashing RStudio. I will just hope that all fall within 
-        # the area. Probably crashing because the area is smaller than I am asking it to make the inner buffer
-        # potLayTopValidIn <- terra::buffer(potLayTopValid, width = -(Size/2))
-        # potLayTopValidIn <- terra::makeValid(potLayTopValidIn)
+          # 1.3. Once the best places are chosen, we place the disturbance in a new layer, which will 
+          # have to be updated until we leave the while loop
+          # Make an inner buffer with the half of the size of the Size to make sure we have the full 
+          # new disturbance within the area designated! 
+          # UPDATE: I can't do this as it is crashing RStudio. I will just hope that all fall within 
+          # the area. Probably crashing because the area is smaller than I am asking it to make the inner buffer
+          # potLayTopValidIn <- terra::buffer(potLayTopValid, width = -(Size/2))
+          # potLayTopValidIn <- terra::makeValid(potLayTopValidIn)
           if (ORIGIN == "seismicLines"){
             if (useClusterMethod){
               
@@ -530,11 +531,11 @@ generateDisturbancesShp <- function(disturbanceParameters,
               # clusters to be duplicated. This duplication will then get VERY close to the expected area,
               # likely slightly below (as not many lines overlap) --> The smaller the buffer 
               # (clusterDistance and distanceNewLinesFactor) new lines will be closer 
-
+              
               if (geomtype(cropLayFinal) != "lines"){
-              print("cropLayFinal needs to be lines and needs to have all previous lines")
+                print("cropLayFinal needs to be lines and needs to have all previous lines")
                 browser()
-                }
+              }
               
               # 0. Calculate the area of each line buffered by 3m (min width in the field)
               cropLayFinal$buff3mAreaM2 <- expanse(buffer(x = cropLayFinal, width = 3))
@@ -549,7 +550,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 message(paste0("Total contribution of clusters in total area is higher than 100%.",
                                "Something may be wrong. Entering debug mode."))
                 browser()
-                } # TODO test
+              } # TODO test
               # 2. Choose randomly clusters (with different probabilities) that sum to the total expected new. 
               # sumBuff3mAreaM2 --> by cluster
               # PercBuff3mAreaOfTotalM2 --> representation if each cluster over the total
@@ -558,24 +559,24 @@ generateDisturbancesShp <- function(disturbanceParameters,
               # Normalize probabilities to sum to 1
               probabilities <- unique(cropLayFinalDT$Potential) / sum(unique(cropLayFinalDT$Potential))
               sampledClusters <- sample(unique(cropLayFinalDT$Potential), 
-                                          size = growthStepEnlargingLines*1000, 
-                                          replace = TRUE, 
-                                          prob = probabilities)
-                selectedClusters <- NULL
-                for (uniqueSampClus in unique(sampledClusters)){
-                  toChoseFrom <- unique(cropLayFinalDT[Potential == sampledClusters[uniqueSampClus], Pot_Clus])
-                  howManyINeed <- sum(sampledClusters == uniqueSampClus)
-                  selectedClusters <- c(selectedClusters, 
-                                        sample(toChoseFrom, 
-                                               replace = TRUE,
-                                               size = howManyINeed))
-                }              
+                                        size = growthStepEnlargingLines*10, ### <~~~~~~~~~~~~ Changed here from 1000 to 10 to try increasing iterations number in Seismic lines, currently overdoing it. 
+                                        replace = TRUE, 
+                                        prob = probabilities)
+              selectedClusters <- NULL
+              for (uniqueSampClus in unique(sampledClusters)){
+                toChoseFrom <- unique(cropLayFinalDT[Potential == sampledClusters[uniqueSampClus], Pot_Clus])
+                howManyINeed <- sum(sampledClusters == uniqueSampClus)
+                selectedClusters <- c(selectedClusters, 
+                                      sample(toChoseFrom, 
+                                             replace = TRUE,
+                                             size = howManyINeed))
+              }              
               #TODO Here I can parallelize using future!
-                newLines <- simulateLines(Lines = cropLayFinal[cropLayFinal$Pot_Clus %in% selectedClusters, ],
-                                          distThreshold = clusterDistance,
-                                          distNewLinesFact = distanceNewLinesFactor,
-                                          refinedStructure = refinedStructure)
-
+              newLines <- simulateLines(Lines = cropLayFinal[cropLayFinal$Pot_Clus %in% selectedClusters, ],
+                                        distThreshold = clusterDistance,
+                                        distNewLinesFact = distanceNewLinesFactor,
+                                        refinedStructure = refinedStructure)
+              
               # newDist NEEDS to be buffered, first by 3m and then (happening below in the code) by 
               # 500m, if 
               # disturbanceRateRelatesToBufferedArea 
@@ -715,8 +716,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
             # Here we create a random study area based on the center point for the area where 
             # the disturbance is more likely to happen.
             newDist <- SpaDES.tools::randomStudyArea(center = centerPoint, size = Size)
-            names(newDist) <- names(centerPoint)
+            
+            ### CATCHING PROBLEMS ###
             if (is.na(newDist)) browser()
+            #########################
+            
+            names(newDist) <- names(centerPoint)
             # 1.4. If we relate to buffered area, we need to make an inner buffer, as it is included in 
             # areaChosenTotal.
             if (disturbanceRateRelatesToBufferedArea){
@@ -734,7 +739,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
               } else {
                 # Otherwise, we buffer innwards and that's our disturbance
                 newDist <- terra::buffer(newDist, width = -500)
-                if (any(!terra::is.valid(newDist),
+                if (any(length(newDist) == 0, # In this case, the disturbance was almost exactly 
+                        # 500m but just a wee bigger, so the result is 0 but it passed the other tests
+                        !terra::is.valid(newDist),
                         any(is.na(as.vector(ext(newDist)))))){
                   newDist <- centerPoint
                 }
@@ -742,15 +749,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
             }
           }
           
-        if (disturbanceRateRelatesToBufferedArea){
-          newDistBuff <- terra::buffer(newDist, width = 500) 
-          if (nrow(newDistBuff) > 1){
-            newDistBuff <- terra::aggregate(newDistBuff)
+          if (disturbanceRateRelatesToBufferedArea){
+            newDistBuff <- terra::buffer(newDist, width = 500) 
+            if (nrow(newDistBuff) > 1){
+              newDistBuff <- terra::aggregate(newDistBuff)
+            }
+            areaChosenTotal <- areaChosenTotal + terra::expanse(newDistBuff, unit = "m", transform = FALSE)
+          } else { 
+            areaChosenTotal <- areaChosenTotal + terra::expanse(newDist, unit = "m", transform = FALSE)
           }
-          areaChosenTotal <- areaChosenTotal + terra::expanse(newDistBuff, unit = "m", transform = FALSE)
-        } else { 
-          areaChosenTotal <- areaChosenTotal + terra::expanse(newDist, unit = "m", transform = FALSE)
-        }
           if (geomtype(newDist) %in% c("points", "lines")){
             if (IT == 2)
               message("Types of geometry differ, buffering new disturbance to a minimum value")
@@ -771,11 +778,13 @@ generateDisturbancesShp <- function(disturbanceParameters,
           
           if (IT == 1){
             newDisturbs <- newDist
-            } else {
-              newDisturbs <- rbind(newDisturbs, newDist)
+          } else {
+            newDisturbs <- rbind(newDisturbs, newDist)
           }
-        IT <- IT + 1
-      }
+          IT <- IT + 1
+        }
+      
+      
       message(paste0("Percentage of disturbed future area after buffer: ", 
                      round(100*(areaChosenTotal/totalstudyAreaVAreaSqm), 4), "%."))
       
@@ -1026,10 +1035,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
                            ": ", 100*round(i/NROW(oriLayVect), 4),"% of ", 
                            Sector," (",disturbanceOrigin,
                            ") for year ", currentTime))
-            connectedOne <- spaths::shortest_paths(rst = oRas, origins = oriLayVect[i, ],
+            connectedOne <- tryCatch({
+              spaths::shortest_paths(rst = oRas, origins = oriLayVect[i, ],
                                            destinations = cEndLay,
                                            update_rst = as.polygons(featuresToAvoid), 
                                            output = "lines", show_progress = FALSE)
+            }, error = function(e){
+              print("Caught error in shortest path.")
+              browser()
+            })
             # message("***** END Finding shortest paths *******")
             connectedOne <- connectedOne[connectedOne$layer > 0,]
           } else {
