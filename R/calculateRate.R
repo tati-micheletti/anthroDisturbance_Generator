@@ -37,7 +37,7 @@ calculateRate <- function(disturbanceParameters,
                    " area extends outside of a caribou range. Ideally, either 1) this layer ",
                    " should be replaced by a similar layer which instead covers the ",
                    "whole country, or 2) one should provide the object 'DisturbanceRate' to",
-                   " simulate development scenarios."), 
+                   " simulate development scenarios focusing on individual disturbances."), 
             immediate. = TRUE)
     
     AD_changed_file <- file.path(destinationPath, 
@@ -83,7 +83,11 @@ calculateRate <- function(disturbanceParameters,
       # size. In this case, we will use defaults for what we know: 
       message(paste0("Calculating rate for ", sub[["disturbanceType"]], 
                      " of ", sub[["dataClass"]]))
-      if (is.null(lay)){
+      if (any(is.null(lay),
+              length(lay) == 0)){
+        #TODO Curently, if a disturbance is not currently present in the study area, it won't
+        # be simulated. We can improve this by checking the potential within the study area
+        # and coming up with a solution.
         if (sub[["dataClass"]] == "potentialWindTurbines"){
           
           # Only one wind turbines exists in NWT, there isn't a layer pinpointing where. 
@@ -123,7 +127,8 @@ calculateRate <- function(disturbanceParameters,
           sub[, disturbanceRate := areaChangePerYearInKm2PerKm2*100] #areaSqKmChangedPerYear/totalAreaSqKm
         } else {
           message(crayon::red(paste0("There is no information on rate for ", sub[["dataClass"]],
-                                     ". The module will return NULL and this class will not be simulated. ",
+                                     " for the study Area. The module will return NULL and this",
+                                     "class will not be simulated. ",
                                      "If this is wrong, please provide both disturbanceRate and disturbanceSize ",
                                      "in the disturbanceParameters table.")))
           sub <- NULL
@@ -151,8 +156,10 @@ calculateRate <- function(disturbanceParameters,
             subProportionTable[, calculatedDisturbanceProportion := proportionOfTotalDisturbance*totalDisturbanceRate]
             # 4. Replace in DisturbanceRate the disturbanceRate by calculatedDisturbanceProportion for the
             # ones that are on the table
-              sub[disturbanceOrigin == subProportionTable[["dataClass"]],
-                                  disturbanceRate := subProportionTable[["calculatedDisturbanceProportion"]]]
+            tryCatch({sub[disturbanceOrigin == subProportionTable[["dataClass"]],
+                                  disturbanceRate := subProportionTable[["calculatedDisturbanceProportion"]]]}, error = function(e) {print("Edge case? Entering browser")
+                                    browser()
+                                    })
           } else {
             # 5. Modify the table, which should be an Input.
             # This process ensures we are not double counting disturbances, and that we can calculate the change 
