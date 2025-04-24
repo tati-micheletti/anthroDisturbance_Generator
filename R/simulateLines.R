@@ -189,16 +189,18 @@ simulateLines <- function(Lines, distThreshold = 5000,
     sLines <- do.call(rbind, simulatedLines)
     sLines$Pot_Clus <- unique(exSet$Pot_Clus)
     sLines$lineLength <- perim(sLines)
-    if (exists("createdLines")){
-      createdLines <- rbind(createdLines, sLines)
-    } else {
+    # if (exists("createdLines")){ # How can they exist?!?!
+      # createdLines <- rbind(createdLines, sLines)
+    # } else {
       createdLines <- sLines 
-    }
-    createdLines[createdLines$Pot_Clus == potclus, "Pot_Clus"] <- paste0(unique(exSet$Potential),
-                                                             "_",potclus)
-    createdLines[createdLines$Pot_Clus == potclus, "calculatedLength"] <- perim(createdLines[createdLines$Pot_Clus == potclus, ])
-    # createdLines[createdLines$Pot_Clus == potclus, "totalLines"] <- nrow(createdLines[createdLines$Pot_Clus == potclus, ])
-    createdLines[createdLines$Pot_Clus == potclus, "angles"] <- angles
+    # }
+    # createdLines[createdLines$Pot_Clus == potclus, "Pot_Clus"] <- paste0(unique(exSet$Potential), "_",potclus)
+    # createdLines[createdLines$Pot_Clus == potclus, "calculatedLength"] <- perim(createdLines[createdLines$Pot_Clus == potclus, ])
+    # createdLines[createdLines$Pot_Clus == potclus, "angles"] <- angles
+      createdLines[, "Pot_Clus"] <- paste0(unique(exSet$Potential), "_",potclus)
+      createdLines[, "calculatedLength"] <- perim(createdLines[createdLines$Pot_Clus == potclus, ])
+      createdLines[, "angles"] <- angles
+      createdLines[, "Potential"] <- sub("_.*", "", createdLines$Pot_Clus)
   }
   return(createdLines)
 }
