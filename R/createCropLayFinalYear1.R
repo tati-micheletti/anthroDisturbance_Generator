@@ -1,4 +1,5 @@
-createCropLayFinalYear1 <- function(Lay, potLayTopValid, runClusteringInParallel, clusterDistance){
+createCropLayFinalYear1 <- function(Lay, potLayTopValid, runClusteringInParallel, 
+                                    clusterDistance, studyAreaHash){
   # 1. Crop and mask the seismicLines layer to the actual most probable area (potLayTopValid)
   cropLay <- Cache(postProcessTo, Lay, potLayTopValid)
   # 2. Convert all lines to polygons to exclude them from selecting the random point
@@ -60,9 +61,9 @@ createCropLayFinalYear1 <- function(Lay, potLayTopValid, runClusteringInParallel
                         distThreshold = clusterDistance, 
                         currPotential = Pot,
                         runInParallel = runClusteringInParallel,
-                        totPotential = length(unique(cropLay$Potential)))
+                        totPotential = length(unique(cropLay$Potential)), 
+                        userTags = studyAreaHash)
     return(cropLayInt)
   }))
-  
   return(cropLayFinal)
 }
