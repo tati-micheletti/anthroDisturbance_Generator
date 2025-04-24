@@ -326,8 +326,6 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # toc()
         # distRas2 <- (distRas-maxValue(distRas))*-1
         # distRas2[is.na(potLayF)] <- NA
-        print("Check the forestry's potential layer (potLay)... Why not being returned as NULL but with name?")
-        browser()
         }
       
       
@@ -347,8 +345,6 @@ generateDisturbancesShp <- function(disturbanceParameters,
         message(paste0("The potential area for ", Sector, " class ", ORIGIN, " is NULL.",
                        " Likely cropped out from studyArea. Returning NULL."))
         
-        print("Check the forestry's potential layer (potLay)... Why not being returned as NULL but with name?")
-        browser()
         return(NULL)
       }
 
