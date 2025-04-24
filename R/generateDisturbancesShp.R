@@ -31,6 +31,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
   # Total study area
   rasterToMatchR <- raster::raster(rasterToMatch)
   probabilityDisturbance <- if (is.null(probabilityDisturbance)) list() else probabilityDisturbance
+  studyAreaHash <- digest(studyArea)
   
   if (!is(studyArea, "SpatVector"))
     studyArea <- terra::vect(studyArea)
@@ -200,6 +201,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
     return(updatedL)
   })
   names(Enlarged) <- whichSector
+  #############################################
+  
   
   # SECOND: Generating
   #############################################
@@ -257,7 +260,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # Create allLaysRas, which is the disturbance raster with all disturbances rasterized, with
         # value == 1 for the disturbed pixels. Non-disturbed pixels are NA
   }
-  
+
   dPar <- disturbanceParameters[disturbanceType  %in% "Generating", ]
   whichSector <- dPar[["dataName"]]
   Generated <- lapply(1:nrow(dPar), function(ROW) {
@@ -265,7 +268,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
     whichOrigin <- dPar[ROW, disturbanceOrigin]
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
       dParOri <- dPar[dataName == Sector & disturbanceOrigin == ORIGIN,]
-      Lay <- disturbanceList[[Sector]][[ORIGIN]]
+      Lay <- disturbanceList[[Sector]][[ORIGIN]] # If there are no disturbances, Lay will be NULL
       if (is.null(Lay)) {
         message(crayon::red(paste0("Layer of dataName = ", Sector, " and disturbanceOrigin = ",
                                    ORIGIN, " doesn't exist in disturbanceList. Potentially this disturbance ",
@@ -323,7 +326,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # toc()
         # distRas2 <- (distRas-maxValue(distRas))*-1
         # distRas2[is.na(potLayF)] <- NA
-      }
+        print("Check the forestry's potential layer (potLay)... Why not being returned as NULL but with name?")
+        browser()
+        }
       
       
       # We need to aggregate the potential layer to make sure we have all possible polygons with the 
@@ -341,6 +346,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
       if (length(potLay) == 0){# In case the cropped area doens't have anything
         message(paste0("The potential area for ", Sector, " class ", ORIGIN, " is NULL.",
                        " Likely cropped out from studyArea. Returning NULL."))
+        
+        print("Check the forestry's potential layer (potLay)... Why not being returned as NULL but with name?")
+        browser()
         return(NULL)
       }
 
@@ -431,7 +439,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
       
       # If probabilityDisturbance is NOT provided, calculate
       if (all(ORIGIN %in% siteSelectionAsDistributing,
-              is.null(probabilityDisturbance[[ORIGIN]]))){ # NOTE: Very time consuming!
+              is.null(probabilityDisturbance[[ORIGIN]]))){ # NOTE: Potentiall yery time consuming!
         message(paste0("probabilityDisturbance for ", ORIGIN, " is NULL. Calculating from data..."))
         # 1. Extract the total area of each polygon type
         potLayTopValid$areaPerPoly <- terra::expanse(potLayTopValid, unit = "m", transform = FALSE)
@@ -454,24 +462,44 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # If provided, test that probabilityDisturbance matches the Potential
         potValsPassed <- unique(sort(probabilityDisturbance[[ORIGIN]][["Potential"]]))
         potValsLay <- unique(sort(potLayTopValid$Potential))
-        passTest <- all(potValsPassed == potValsLay)
-        if (!passTest)
-          stop(paste0("The probabilityDisturbance was provided, but do not match the expected Potential values for ",
-                      ORIGIN, ".\n",
-                      "Potential values passed: ", paste(potValsPassed, collapse = ", "), "\n",
-                      "Potential values in layer: ", paste(potValsLay, collapse = ", ")))
+        passTest <- all(potValsLay %in% potValsPassed)
+        if (!passTest){
+          if (!is.null(Lay)){
+            # Cases where we just don't have the probability for the area will 
+            # have Lay as NULL.
+            # We will not have potential values in this case because we don't 
+            # have the data.These should be fine. 
+
+            # We could calculate the probability for the area, but it is not happening for some wicked reason.
+            warning(paste0("The probabilityDisturbance was provided, but do not match the expected Potential values for ",
+                        ORIGIN, ".\n",
+                        "Potential values passed: ", paste(potValsPassed, collapse = ", "), "\n",
+                        "Potential values in layer: ", paste(potValsLay, collapse = ", "), 
+                        ". This may happen in small study areas and should not be",
+                        "cause of concern but may help identify errors."), 
+                    immediate. = TRUE)
+          }
+        }
       }
       # For seismic Lines we need to do some area processing of the before we can 
       # generate the disturnances. And we don't want to repeat this every time inside
       # a while loop, as it doesn't change, so we do it outside
       if (ORIGIN == "seismicLines"){
         if (firstTime){
-          cropLayFinal <- Cache(createCropLayFinalYear1, Lay = Lay, 
-                                                  potLayTopValid = potLayTopValid, 
-                                                  runClusteringInParallel = runClusteringInParallel, 
-                                                  clusterDistance = clusterDistance)
+          message("First time generating sesmicLines, proceeding with clustering...")
+          cropLayFinal <- Cache(createCropLayFinalYear1, 
+                                Lay = Lay, 
+                                potLayTopValid = potLayTopValid, 
+                                runClusteringInParallel = runClusteringInParallel, 
+                                clusterDistance = clusterDistance, 
+                                studyAreaHash = studyAreaHash)
           terra::writeVector(x = cropLayFinal, 
-                             filename = file.path(outputsFolder, paste0("seismicLinesYear", currentTime, ".shp")),
+                             filename = file.path(outputsFolder, 
+                                                  paste0("seismicLinesYear", 
+                                                         currentTime, 
+                                                         "_",
+                                                         studyAreaHash,
+                                                         ".shp")),
                              overwrite = TRUE)
         } else {
           cropLayFinal <- Lay
@@ -484,7 +512,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
       newDisturbs <- NULL
       alreadyReduced <- FALSE
       
-        while (areaChosenTotal < expectedNewDisturbAreaSqM){
+      while (areaChosenTotal < expectedNewDisturbAreaSqM){
           if (IT %in% 1:10){
             message(paste0("Calculating total generated disturbance size for ", Sector, " for ", 
                            ORIGIN, " (Year ", currentTime,"; iteration ", IT, ", ", 
@@ -509,7 +537,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
             message(paste0("Rate of disturbance for ", ORIGIN, " is very small and the probability of ",
                            "this disturbance happening returned 0.",
                            " Returning layer without disturbances."))
-            next
+            break
           }
           # 1.3. Once the best places are chosen, we place the disturbance in a new layer, which will 
           # have to be updated until we leave the while loop
@@ -558,10 +586,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
               # --> Draw for all potentials, the probability a cluster within these will be chosen (higher potential, higher chances)
               # Normalize probabilities to sum to 1
               probabilities <- unique(cropLayFinalDT$Potential) / sum(unique(cropLayFinalDT$Potential))
+              tryCatch({
               sampledClusters <- sample(unique(cropLayFinalDT$Potential), 
                                         size = growthStepEnlargingLines*10, ### <~~~~~~~~~~~~ Changed here from 1000 to 10 to try increasing iterations number in Seismic lines, currently overdoing it. 
                                         replace = TRUE, 
                                         prob = probabilities)
+              }, error = function(e){
+                print("Error in Line 591, debug!")
+                browser()
+              })
               selectedClusters <- NULL
               for (uniqueSampClus in unique(sampledClusters)){
                 toChoseFrom <- unique(cropLayFinalDT[Potential == sampledClusters[uniqueSampClus], Pot_Clus])
@@ -576,7 +609,6 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                         distThreshold = clusterDistance,
                                         distNewLinesFact = distanceNewLinesFactor,
                                         refinedStructure = refinedStructure)
-              
               # newDist NEEDS to be buffered, first by 3m and then (happening below in the code) by 
               # 500m, if 
               # disturbanceRateRelatesToBufferedArea 
@@ -814,12 +846,14 @@ generateDisturbancesShp <- function(disturbanceParameters,
     return(updatedL)
   })
   names(Generated) <- whichSector
+  #############################################
   
   # THIRD: CONNECTING (Use generated and table)
   #############################################
   message(crayon::white("Connecting disturbances..."))
   dPar <- disturbanceParameters[disturbanceType  %in% "Connecting", ]
   Connected <- lapply(1:NROW(dPar), function(index) {
+    print(paste0("Connected Index ", index))
     Sector <- dPar[index, dataName]
     disturbanceOrigin <- dPar[index, disturbanceOrigin]
     disturbanceEnd <- dPar[index, disturbanceEnd]
@@ -1076,6 +1110,10 @@ generateDisturbancesShp <- function(disturbanceParameters,
       return(NULL)
     }
     connected[["Class"]] <- na.omit(classEndLay)
+    if (any(is.na(ext(connected)))){
+      print("connected got NaN extent! See why")
+      browser()
+    }
     Lay <- list(connected)
     names(Lay) <- disturbanceEnd
     if (disturbanceRateRelatesToBufferedArea){
@@ -1090,31 +1128,36 @@ generateDisturbancesShp <- function(disturbanceParameters,
                      " -- ", disturbanceEnd, ": ", round(currArea/1000000, 2), " Km2"))
       message(paste0("Percentage of current area: ", round(100*((currArea/1000000)/totalstudyAreaVAreaSqKm), 3), "%."))
     }
+
     return(Lay)
   })
   names(Connected) <- dPar[["dataName"]]
   # Mash together what has the same name
   # Which Sector has layers that are the same?
+  whichSectorHasMoreThanOne <- unique(names(Connected)[duplicated(names(Connected))])  
+  whichSectorHasOne <- setdiff(names(Connected), whichSectorHasMoreThanOne)
   
-  nms <- names(unlist(lapply(Connected, names)))
-  whichSectorHasOne <- unique(nms[ave(seq_along(nms), nms, FUN = length)==1])
-  # To control for other cases:
-  whichSectorHasMoreThanOne <- unique(nms[ave(seq_along(nms), nms, FUN = length)>1])
   if (length(whichSectorHasMoreThanOne) > 1){
     stop(paste0("There are at least two sectors with more than one layers to merge, which is",
-                "currently not supported. ",
-                "Please re-code (line 615 of generateDisturbances.R) to allow for this case"))
+                "not been implemented. Please adapt the code in generateDisturbanceShp.R to ",
+                "allow for it."))
   }
-  toMerge <- unlist(Connected)[which(!names(Connected) %in% whichSectorHasOne)]
+  toMerge <- unlist(Connected[which(names(Connected) %in% whichSectorHasMoreThanOne)], 
+                    recursive = TRUE)
   names(toMerge) <- NULL
-  merged <- list(do.call(rbind, toMerge))
-  nm <- unique(names(Connected[[whichSectorHasMoreThanOne]]))
-  names(merged) <- nm # Second level 
-  
-  merged <- list(merged)
+  if (length(toMerge) == 0){
+    warning(paste0("There is one sector with multiple layers to merge (i.e.,",
+                   whichSectorHasMoreThanOne,"), but they are all NULL.",
+            "This has not been extensively tested and might fail!"),immediate. = TRUE)
+    merged <- list(NULL)
+  } else {
+    merged <- list(do.call(rbind, toMerge)) 
+  }
+  names(merged) <- names(Connected[whichSectorHasMoreThanOne]) # Second level
+  merged <- list(merged) # First level
   names(merged) <- whichSectorHasMoreThanOne # First level
   
-  # Replace the merged class in the Connected object
+    # Replace the merged class in the Connected object
   updatedToMerge <- Connected[names(Connected) %in% whichSectorHasOne]
   Connected <- c(updatedToMerge, merged)
   
@@ -1126,11 +1169,16 @@ generateDisturbancesShp <- function(disturbanceParameters,
 
   # Now merge all disturbances (raster format) to avoid creating new disturbances where it has 
   # already been disturbed
-  
   currentDisturbance <- copy(individuaLayers)
-  curDistRas <- lapply(1:length(currentDisturbance), function(index1){
+    curDistRas <- lapply(1:length(currentDisturbance), function(index1){
     SECTOR <- names(currentDisturbance)[index1]
-    curDistRas <- lapply(1:length(currentDisturbance[[index1]]), function(index2){
+    if (length(currentDisturbance[[index1]]) == 0){ 
+      # If NULL on the outter side, length 1:0 is actually 2!
+      maxLeng <- 1
+    } else {
+      maxLeng <- length(currentDisturbance[[index1]])
+    }
+    curDistRas <- lapply(1:maxLeng, function(index2){
       Class <- names(currentDisturbance[[index1]])[index2]
       ras <- currentDisturbance[[index1]][[index2]]
       isNULLras <- is.null(ras)
@@ -1158,17 +1206,25 @@ generateDisturbancesShp <- function(disturbanceParameters,
         return(ras)
       }
     })
-    if (length(curDistRas) == length(names(currentDisturbance[[index1]]))){
-      names(curDistRas) <- names(currentDisturbance[[index1]])
+    if (!is.null(unlist(curDistRas))){
+      if (length(curDistRas) == length(names(currentDisturbance[[index1]]))){
+        names(curDistRas) <- names(currentDisturbance[[index1]])
+      } else {
+        warning("Rasters are not NULL, but the number of rasters doesn't match the number of names. Please debug.", 
+                immediate. = TRUE)
+        browser()
+      }
     } else {
-      stop("The amount of rasters doesn't match the amount of names. Please debug.")
+      message(paste0("The current disturbance raster for ", SECTOR, " is NULL. Returning without internal names."))
     }
     return(curDistRas)
   })
   if (length(curDistRas) == length(names(currentDisturbance))){
     names(curDistRas) <- names(currentDisturbance)
   } else {
-    stop("The amount of rasters doesn't match the amount of names. Please debug.")
+    warning("The number of rasters doesn't match the number of names. Please debug.", 
+            immediate. = TRUE)
+    browser()
   }
 
   ########################### FINAL LAYERS ###########################
@@ -1228,7 +1284,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
   
   ### RETURN!
   if (firstTime){
-    seismicLinesFirstYear <- vect(file.path(outputsFolder, paste0("seismicLinesYear", currentTime, ".shp")))
+    seismicLinesFirstYear <- vect(file.path(outputsFolder, 
+                                                paste0("seismicLinesYear", 
+                                                       currentTime, 
+                                                       "_",
+                                                       studyAreaHash,
+                                                       ".shp")))
   } else {
     seismicLinesFirstYear <- NULL
   }
