@@ -5,7 +5,7 @@ replaceListFast <- function(disturbanceList,
   
   updatedLayers <- updatedLayersAll$individuaLayers
   correctMatching <- match(names(updatedLayers), names(disturbanceList))
-  
+  cleanedNames <- names(disturbanceList)[unique(sort(correctMatching))]
   externalLays <- lapply(unique(sort(correctMatching)), function(INDEX) {
     Sector <- names(disturbanceList)[INDEX]
     updatedLayerIndex <- which(correctMatching==INDEX)
@@ -151,6 +151,6 @@ replaceListFast <- function(disturbanceList,
     names(internalLays) <- c(potentialLayName, names(upToDate))
     return(internalLays)
   })
-  names(externalLays) <- names(disturbanceList)
+  names(externalLays) <- cleanedNames
   return(externalLays)
 }
