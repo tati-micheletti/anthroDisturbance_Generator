@@ -29,7 +29,7 @@ defineModule(sim, list(
                   "data.table", "PredictiveEcology/reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
                   "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm",
-                  "foreach", "doParallel"), #TODO review needed packages.
+                  "foreach", "doParallel", "digest"), #TODO review needed packages.
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -380,7 +380,7 @@ defineModule(sim, list(
                                "If not provided, it uses as default data from the geodata R package. ", 
                                "Only used if maskWaterAndMountainsFromLines == TRUE"),
                  sourceURL = NA)
-    ),
+  ),
   outputObjects = bindrows(
     createsOutput(objectName = "disturbanceList", objectClass = NA, 
                   desc = paste0("Updated list (general category) of lists (specific ",
@@ -407,12 +407,12 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                     "disturbanceParameters are accepted for parameter siteSelectionAsDistributing. ",
                     "Please provide NA or any combination of the following: ", 
                     paste(unique(sim$disturbanceParameters$disturbanceOrigin), collapse = ", ")
-                    ))
+        ))
       
       # Make sure RTM and studyArea projections match
       sim$studyArea <- projectInputs(sim$studyArea, 
                                      targetCRS = crs(sim$rasterToMatch))
-
+      
       ### Make sure that disturbanceDT is data.table      
       if (any(class(sim$disturbanceDT) != "data.table")){
         tryCatch({
@@ -443,19 +443,20 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       }
       
       # schedule future event(s)
-        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingSize", eventPriority = 4)
-        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingRate", eventPriority = 4)
-        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "generatingDisturbances", eventPriority = 4)
-        sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "updatingDisturbanceList", eventPriority = 4)
+      sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingSize", eventPriority = 4)
+      sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingRate", eventPriority = 4)
+      sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "generatingDisturbances", eventPriority = 4)
+      sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "updatingDisturbanceList", eventPriority = 4)
     },
     calculatingSize = {
+
       # Check for needed sizes. If all provided, skip event
       mod$.whichNeedSize <- which(sim$disturbanceParameters[, disturbanceType == "Generating" &
                                                               is.na(disturbanceSize)])
       if (length(mod$.whichNeedSize) != 0)
         sim$disturbanceParameters <- calculateSize(disturbanceParameters = sim$disturbanceParameters,
-                                                 whichToUpdate = mod$.whichNeedSize,
-                                                 disturbanceList = sim$disturbanceList)
+                                                   whichToUpdate = mod$.whichNeedSize,
+                                                   disturbanceList = sim$disturbanceList)
     },
     calculatingRate = {
       # Check for needed rates. If all provided, skip event
@@ -463,20 +464,20 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                                is.na(disturbanceRate)])
       if (length(mod$.whichNeedRates) != 0)
         sim$disturbanceParameters <- calculateRate(disturbanceParameters = sim$disturbanceParameters,
-                                                 whichToUpdate = mod$.whichNeedRates,
-                                                 studyArea = sim$studyArea,
-                                                 disturbanceList = sim$disturbanceList,
-                                                 RTM = sim$rasterToMatch,
-                                                 disturbanceDT = sim$disturbanceDT,
-                                                 destinationPath = Paths[["inputPath"]],
-                                                 totalDisturbanceRate = P(sim)$totalDisturbanceRate,
-                                                 DisturbanceRate = sim$DisturbanceRate,
-                                                 disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
-                                                 maskOutLinesFromPolys = P(sim)$maskOutLinesFromPolys,
-                                                 aggregateSameDisturbances = P(sim)$aggregateSameDisturbances)
-      },
+                                                   whichToUpdate = mod$.whichNeedRates,
+                                                   studyArea = sim$studyArea,
+                                                   disturbanceList = sim$disturbanceList,
+                                                   RTM = sim$rasterToMatch,
+                                                   disturbanceDT = sim$disturbanceDT,
+                                                   destinationPath = Paths[["inputPath"]],
+                                                   totalDisturbanceRate = P(sim)$totalDisturbanceRate,
+                                                   DisturbanceRate = sim$DisturbanceRate,
+                                                   disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
+                                                   maskOutLinesFromPolys = P(sim)$maskOutLinesFromPolys,
+                                                   aggregateSameDisturbances = P(sim)$aggregateSameDisturbances)
+    },
     generatingDisturbances = {
-
+      
       if (all(P(sim)$saveInitialDisturbances,
               start(sim) == time(sim))){
         message(crayon::yellow(paste0("The parameter saveInitialDisturbances is TRUE.",
@@ -544,20 +545,20 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
         })
         if (P(sim)$generatedDisturbanceAsRaster){
           mod$updatedLayers <- generateDisturbances(disturbanceParameters = sim$disturbanceParameters,
-                                                       disturbanceList = sim$disturbanceList,
-                                                       currentTime = time(sim),
-                                                       studyArea = sim$studyArea,
-                                                       rasterToMatch = sim$rasterToMatch,
-                                                       fires = mod$rstCurrentBurn,
-                                                       currentDisturbanceLayer = currDis,
-                                                       disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
-                                                       growthStepEnlargingPolys = P(sim)$growthStepEnlargingPolys,
-                                                       growthStepEnlargingLines = P(sim)$growthStepEnlargingLines,
-                                                       growthStepGenerating = P(sim)$growthStepGenerating,
-                                                       connectingBlockSize = P(sim)$connectingBlockSize,
-                                                       outputsFolder = Paths[["outputPath"]],
-                                                       runName = P(sim)$.runName,
-                                                       checkDisturbancesForBuffer = P(sim)$checkDisturbancesForBuffer)
+                                                    disturbanceList = sim$disturbanceList,
+                                                    currentTime = time(sim),
+                                                    studyArea = sim$studyArea,
+                                                    rasterToMatch = sim$rasterToMatch,
+                                                    fires = mod$rstCurrentBurn,
+                                                    currentDisturbanceLayer = currDis,
+                                                    disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
+                                                    growthStepEnlargingPolys = P(sim)$growthStepEnlargingPolys,
+                                                    growthStepEnlargingLines = P(sim)$growthStepEnlargingLines,
+                                                    growthStepGenerating = P(sim)$growthStepGenerating,
+                                                    connectingBlockSize = P(sim)$connectingBlockSize,
+                                                    outputsFolder = Paths[["outputPath"]],
+                                                    runName = P(sim)$.runName,
+                                                    checkDisturbancesForBuffer = P(sim)$checkDisturbancesForBuffer)
         } else {
           mod$updatedLayers <- generateDisturbancesShp(disturbanceParameters = sim$disturbanceParameters,
                                                        disturbanceList = sim$disturbanceList,
@@ -588,7 +589,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        runClusteringInParallel = P(sim)$runClusteringInParallel,
                                                        refinedStructure = P(sim)$refinedStructure)
         }
-
+        
         sim$currentDisturbanceLayer[[paste0("Year", time(sim))]] <- mod$updatedLayers$currentDisturbanceLayer
       } else {
         message("No disturbances scheduled for this year")
@@ -597,21 +598,21 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
     },
     updatingDisturbanceList = {
       if (length(mod$.whichToRun) != 0){
-      sim$disturbanceList <- replaceListFast(disturbanceList = sim$disturbanceList,
-                                             updatedLayersAll = mod$updatedLayers,
-                                             currentTime = time(sim),
-                                             disturbanceParameters = sim$disturbanceParameters)
-      
-      if (P(sim)$saveCurrentDisturbances){
-        message(paste0("Saving current disturbances for year ", time(sim)))
-        saveDisturbances(disturbanceList = sim$disturbanceList,
-                         currentTime = time(sim), 
-                         overwrite = TRUE,
-                         runName = P(sim)$.runName)
+        sim$disturbanceList <- replaceListFast(disturbanceList = sim$disturbanceList,
+                                               updatedLayersAll = mod$updatedLayers,
+                                               currentTime = time(sim),
+                                               disturbanceParameters = sim$disturbanceParameters)
+        
+        if (P(sim)$saveCurrentDisturbances){
+          message(paste0("Saving current disturbances for year ", time(sim)))
+          saveDisturbances(disturbanceList = sim$disturbanceList,
+                           currentTime = time(sim), 
+                           overwrite = TRUE,
+                           runName = P(sim)$.runName)
         }
       }
       sim <- scheduleEvent(sim, time(sim) + P(sim)$runInterval, "anthroDisturbance_Generator", "updatingDisturbanceList")
-
+      
     },
     warning(paste("Undefined event type: \'", current(sim)[1, "eventType", with = FALSE],
                   "\' in module \'", current(sim)[1, "moduleName", with = FALSE], "\'", sep = ""))
@@ -657,9 +658,9 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                             fun = "data.table::fread",
                                             header = TRUE,
                                             userTags = "disturbanceParameters")
-
+    
     message(crayon::red(paste0("disturbanceParameters was not supplied. Defaulting to an example from ",
-                   " Northwest Territories")))
+                               " Northwest Territories")))
   }
   
   if (!suppliedElsewhere(object = "rstCurrentBurn", sim = sim)) {
