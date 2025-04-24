@@ -88,51 +88,51 @@ calculateRate <- function(disturbanceParameters,
         #TODO Curently, if a disturbance is not currently present in the study area, it won't
         # be simulated. We can improve this by checking the potential within the study area
         # and coming up with a solution.
-        if (sub[["dataClass"]] == "potentialWindTurbines"){
-          
-          # Only one wind turbines exists in NWT, there isn't a layer pinpointing where. 
-          # Therefore, we researched what would this mean in the NWT (NT1_BCR6: 572448 km2):
-          
-          # 1 Turbine = 0.0625 km2
-          # 0.1 Turbine = 0.00625 km2 
-          # areaSqKmChangedPerYear <- 0.00625
-          
-          # windTurbines: 6070m2 per 2-megawatt of energy. In the NWT the only big turbine is in a
-          #               Diamond exploration, with 9.2MW being generated (27,900 m2). Each pixel is
-          #               62,500m2 (or 0.0625 km2), so we will have in average, one big turbine in 2.3 pixels.
-          #               There is one turbine being constructed and should be done in 2023 (2021 to be 
-          #               easier on the simulations) -- Size: 3.5-megawatt = less than a pixel
-          #               There are current no plans for more turbines. Still, we might be able to add
-          #               one medium turbine every 10 years. That would mean 1 pixel every 10 years 
-          #               (or 0.1 pixel every year) over 572448 km2. Each pixel is 0.0625 km2, so  
-          #               we have (0.1*0.0625)/572448 = 1.0919e-08 km2 change per km2 of area over 1 year. 
-          #               If we multiply this by the study area, we end up with the total area change 
-          #               for this area per year. But what we need in the table is the % change per 
-          #               year over the area. So we need to divide the resulting value by the area 
-          #               and then multiply by 100 to get the % change in relation to the area.
-                         
-          areaChangePerYearInKm2PerKm2 <- 1.0919e-08 # Which is the same as the proportion of any area
-          
-          message(crayon::yellow(paste0("There is no information on rate for ", sub[["dataClass"]],
-                                        ". However, this is a potentialWindTurbines. The module will ",
-                                        "return a rate of one turbine per 10 years, or 0.1 turbines ",
-                                        "per year over the NT1_BCR6 area (572448 km2). The 0.1",
-                                        "pixels (or 0.625 km2) correspond to ", 
-                                        format(areaChangePerYearInKm2PerKm2*100, 
-                                               scientific = TRUE), 
-                                        "% of the current study area, being this the value replacing NA. ",
-                                        "If this is wrong, please provide both disturbanceRate and ",
-                                        "disturbanceSize in the disturbanceParameters table or in ",
-                                        " the DisturbanceRate")))
-          sub[, disturbanceRate := areaChangePerYearInKm2PerKm2*100] #areaSqKmChangedPerYear/totalAreaSqKm
-        } else {
+        # if (sub[["dataClass"]] == "potentialWindTurbines"){
+        #   
+        #   # Only one wind turbines exists in NWT, there isn't a layer pinpointing where. 
+        #   # Therefore, we researched what would this mean in the NWT (NT1_BCR6: 572448 km2):
+        #   
+        #   # 1 Turbine = 0.0625 km2
+        #   # 0.1 Turbine = 0.00625 km2 
+        #   # areaSqKmChangedPerYear <- 0.00625
+        #   
+        #   # windTurbines: 6070m2 per 2-megawatt of energy. In the NWT the only big turbine is in a
+        #   #               Diamond exploration, with 9.2MW being generated (27,900 m2). Each pixel is
+        #   #               62,500m2 (or 0.0625 km2), so we will have in average, one big turbine in 2.3 pixels.
+        #   #               There is one turbine being constructed and should be done in 2023 (2021 to be 
+        #   #               easier on the simulations) -- Size: 3.5-megawatt = less than a pixel
+        #   #               There are current no plans for more turbines. Still, we might be able to add
+        #   #               one medium turbine every 10 years. That would mean 1 pixel every 10 years 
+        #   #               (or 0.1 pixel every year) over 572448 km2. Each pixel is 0.0625 km2, so  
+        #   #               we have (0.1*0.0625)/572448 = 1.0919e-08 km2 change per km2 of area over 1 year. 
+        #   #               If we multiply this by the study area, we end up with the total area change 
+        #   #               for this area per year. But what we need in the table is the % change per 
+        #   #               year over the area. So we need to divide the resulting value by the area 
+        #   #               and then multiply by 100 to get the % change in relation to the area.
+        #                  
+        #   areaChangePerYearInKm2PerKm2 <- 1.0919e-08 # Which is the same as the proportion of any area
+        #   
+        #   message(crayon::yellow(paste0("There is no information on rate for ", sub[["dataClass"]],
+        #                                 ". However, this is a potentialWindTurbines. The module will ",
+        #                                 "return a rate of one turbine per 10 years, or 0.1 turbines ",
+        #                                 "per year over the NT1_BCR6 area (572448 km2). The 0.1",
+        #                                 "pixels (or 0.625 km2) correspond to ", 
+        #                                 format(areaChangePerYearInKm2PerKm2*100, 
+        #                                        scientific = TRUE), 
+        #                                 "% of the current study area, being this the value replacing NA. ",
+        #                                 "If this is wrong, please provide both disturbanceRate and ",
+        #                                 "disturbanceSize in the disturbanceParameters table or in ",
+        #                                 " the DisturbanceRate")))
+        #   sub[, disturbanceRate := areaChangePerYearInKm2PerKm2*100] #areaSqKmChangedPerYear/totalAreaSqKm
+        # } else {
           message(crayon::red(paste0("There is no information on rate for ", sub[["dataClass"]],
                                      " for the study Area. The module will return NULL and this",
                                      "class will not be simulated. ",
                                      "If this is wrong, please provide both disturbanceRate and disturbanceSize ",
                                      "in the disturbanceParameters table.")))
           sub <- NULL
-        }
+        # }
       } else {
         if (is.null(DisturbanceRate)) {
           if (!is.null(totalDisturbanceRate)){            

@@ -20,20 +20,22 @@ calculateSize <- function(disturbanceParameters,
       #               one medium turbine every 10 years. That would mean 1 pixel every 10 years. 
       # There are no other values that need to be inputted. If the lay is not windTurbine, set the
       # size to NULL and basically skip it with a warning
-      if (sub[["dataClass"]] == "potentialWindTurbines"){
-        sub[, disturbanceSize := 62500]
-        message(crayon::yellow(paste0("There is no information on size for ", sub[["dataClass"]],
-                                   ". However, this is a potentialWindTurbines. The module will ",
-                                   "return a size of 62,500m2 which is equivalent to a medium turbine.",
-                                   "If this is wrong, please provide both disturbanceRate and disturbanceSize ",
-                                   "in the disturbanceParameters table.")))
-      } else {
+      # [UPDATE ON APRIL 2025: This is likely the wrong approach. Leave the decision for the user! 
+      # Therefore commented out the lines below]
+      # if (sub[["dataClass"]] == "potentialWindTurbines"){
+      #   sub[, disturbanceSize := 62500]
+      #   message(crayon::yellow(paste0("There is no information on size for ", sub[["dataClass"]],
+      #                              ". However, this is a potentialWindTurbines. The module will ",
+      #                              "return a size of 62,500m2 which is equivalent to a medium turbine.",
+      #                              "If this is wrong, please provide both disturbanceRate and disturbanceSize ",
+      #                              "in the disturbanceParameters table.")))
+      # } else {
         message(crayon::red(paste0("There is no information on size for ", sub[["dataClass"]],
                        ". The module will return NULL and this class will not be simulated. ",
                        "If this is wrong, please provide both disturbanceRate and disturbanceSize ",
                        "in the disturbanceParameters table.")))
         sub <- NULL
-      }
+      # }
     } else {
       if (class(lay) %in% c("RasterLayer", "SpatRaster")) {
         message(paste0("The layer ", sub[["dataClass"]], " is not a vector. Trying to convert."))
