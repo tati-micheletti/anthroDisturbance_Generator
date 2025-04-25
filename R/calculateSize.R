@@ -1,7 +1,6 @@
 calculateSize <- function(disturbanceParameters,
                           disturbanceList,
                           whichToUpdate){
-
   dP <- disturbanceParameters[whichToUpdate, ]
   updatedDisturbanceParameters <- rbindlist(lapply(1:NROW(dP), function(INDEX){
     # Get the row to be calculated
@@ -47,13 +46,13 @@ calculateSize <- function(disturbanceParameters,
       } else {
         allAreas <- terra::expanse(lay, transform = FALSE, unit = "m")
       }
-      sub[, disturbanceSize := paste0("rtnorm(1, ", round(mean(allAreas), 2), ", ", round(sd(allAreas), 2), ", lower = 0)")]
-      }
+      SDcalc <- if (is.na(round(sd(allAreas), 2))) 0 else round(sd(allAreas), 2)
+      sub[, disturbanceSize := paste0("rtnorm(1, ", round(mean(allAreas), 2), ", ", SDcalc, ", lower = 0)")]
+    }
     return(sub)
   }))
 
   disturbanceParametersUp <- rbind(disturbanceParameters[!whichToUpdate, ], 
                                    updatedDisturbanceParameters, use.names = TRUE)
   return(disturbanceParametersUp)
-  
 }
