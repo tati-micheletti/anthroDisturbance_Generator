@@ -581,16 +581,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
               # Potential --> Represents the highest potential for being chosen.
               # --> Draw for all potentials, the probability a cluster within these will be chosen (higher potential, higher chances)
               # Normalize probabilities to sum to 1
+              if (length(unique(cropLayFinalDT$Potential)) == 1){
+                sampledClusters <- rep(unique(cropLayFinalDT$Potential), times = growthStepEnlargingLines)### <~~~~~~~~~~~~ Changed here from 1000 to 1 to try increasing iterations number in Seismic lines, currently overdoing it.
+              } else {
+                sampledClusters <- sample(unique(cropLayFinalDT$Potential), 
+                                          size = growthStepEnlargingLines, ### <~~~~~~~~~~~~ Changed here from 1000 to 1 to try increasing iterations number in Seismic lines, currently overdoing it. 
+                                          replace = TRUE, 
+                                          prob = probabilities)
+              }
               probabilities <- unique(cropLayFinalDT$Potential) / sum(unique(cropLayFinalDT$Potential))
-              tryCatch({
-              sampledClusters <- sample(unique(cropLayFinalDT$Potential), 
-                                        size = growthStepEnlargingLines*10, ### <~~~~~~~~~~~~ Changed here from 1000 to 10 to try increasing iterations number in Seismic lines, currently overdoing it. 
-                                        replace = TRUE, 
-                                        prob = probabilities)
-              }, error = function(e){
-                print("Error in Line 591, debug!")
-                browser()
-              })
               selectedClusters <- NULL
               for (uniqueSampClus in unique(sampledClusters)){
                 toChoseFrom <- unique(cropLayFinalDT[Potential == sampledClusters[uniqueSampClus], Pot_Clus])
