@@ -3,6 +3,7 @@ calculateRate <- function(disturbanceParameters,
                           disturbanceList,
                           whichToUpdate,
                           RTM,
+                          diffYears = "2010_2015",
                           destinationPath,
                           overwriteDisturbanceLayers2015,
                           overwriteDisturbanceLayers2010,
@@ -11,7 +12,13 @@ calculateRate <- function(disturbanceParameters,
                           totalDisturbanceRate,
                           disturbanceRateRelatesToBufferedArea,
                           maskOutLinesFromPolys,
-                          aggregateSameDisturbances){
+                          aggregateSameDisturbances,
+                          archiveNEW,
+                          targetFileNEW,
+                          urlNEW,
+                          archiveOLD,
+                          targetFileOLD,
+                          urlOLD){
   
   if (all(!is.null(DisturbanceRate), !is.null(totalDisturbanceRate)))
     stop("Both DisturbanceRate and totalDisturbanceRate were provided. Please provide only one,",
@@ -30,7 +37,7 @@ calculateRate <- function(disturbanceParameters,
   totalstudyAreaVAreaSqKm <- terra::expanse(uniStudyArea, unit = "km", transform = FALSE)
   
   if (is.null(DisturbanceRate)){ # When DisturbanceRate is NOT provided
-
+  if (diffYears == "2010_2015")
     warning(paste0("While ECCC 2010 footprint layer covers the whole country, ECCC 2015",
                    " covers only the caribou ranges. This means that the 2015 layer will",
                    " return a biased value for disturbance than it actually is IF the study",
@@ -41,16 +48,25 @@ calculateRate <- function(disturbanceParameters,
             immediate. = TRUE)
     
     AD_changed_file <- file.path(destinationPath, 
-                                 "anthropogenicDisturbance_ECCC_2010_2015.csv")
+                                 paste0("anthropogenicDisturbance_ECCC_", 
+                                        diffYears,"_", digest(studyArea),".csv"))
     if (!file.exists(AD_changed_file)){
       distECCC <- disturbanceInfoFromECCC(studyArea = studyArea, 
                                           RTM = RTM,
+                                          disturbanceList = disturbanceList,
                                           totalstudyAreaVAreaSqKm = totalstudyAreaVAreaSqKm,
                                           classesAvailable = classesAvailable,
                                           destinationPath = destinationPath,
                                           bufferedDisturbances = disturbanceRateRelatesToBufferedArea,
                                           maskOutLinesFromPolys = maskOutLinesFromPolys,
-                                          aggregateSameDisturbances = aggregateSameDisturbances)
+                                          aggregateSameDisturbances = aggregateSameDisturbances,
+                                          archiveNEW = archiveNEW,
+                                          diffYears = diffYears,
+                                          targetFileNEW = targetFileNEW,
+                                          urlNEW = urlNEW,
+                                          archiveOLD = archiveOLD,
+                                          targetFileOLD = targetFileOLD,
+                                          urlOLD = urlOLD)
       
       AD_changed <- distECCC[["AD_changed"]]
     } else {
@@ -60,10 +76,10 @@ calculateRate <- function(disturbanceParameters,
     toUse <- merge(toFill, toLookFor[, c("classToSearch", "dataClass")], all.x = TRUE, 
                    by.x = "Class", by.y = "classToSearch")
     toUse <- data.table::dcast(toUse, dataClass ~ ., fun.agg = sum, 
-                             value.var = c("year2010", "year2015"))
+                             value.var = c("yearOLD", "yearNEW"))
     # Need to recalculate proportions, though!
-    toUse[, disturbProportionInArea2010 := year2010/totalstudyAreaVAreaSqKm]
-    toUse[, disturbProportionInArea2015 := year2015/totalstudyAreaVAreaSqKm]
+    toUse[, disturbProportionInArea2010 := yearOLD/totalstudyAreaVAreaSqKm]
+    toUse[, disturbProportionInArea2015 := yearNEW/totalstudyAreaVAreaSqKm]
     toUse[, totalProportionAreaDisturbed2010 := sum(disturbProportionInArea2010)]
     toUse[, totalProportionAreaDisturbed2015 := sum(disturbProportionInArea2015)]
     
@@ -126,11 +142,10 @@ calculateRate <- function(disturbanceParameters,
         #                                 " the DisturbanceRate")))
         #   sub[, disturbanceRate := areaChangePerYearInKm2PerKm2*100] #areaSqKmChangedPerYear/totalAreaSqKm
         # } else {
-          message(crayon::red(paste0("There is no information on rate for ", sub[["dataClass"]],
-                                     " for the study Area. The module will return NULL and this",
+          message(crayon::red(paste0("There is no potential for ", sub[["dataClass"]],
+                                     " in the study Area. The module will return NULL and this",
                                      "class will not be simulated. ",
-                                     "If this is wrong, please provide both disturbanceRate and disturbanceSize ",
-                                     "in the disturbanceParameters table.")))
+                                     "If this is wrong, please provide a layer with this information ")))
           sub <- NULL
         # }
       } else {
@@ -141,7 +156,8 @@ calculateRate <- function(disturbanceParameters,
                            " rates are desired, please provide DisturbanceRate"),
                     immediate. = TRUE)
             prop_file <- file.path(destinationPath, 
-                                         "proportionTable_ECCC_2010_2015.csv")
+                                   paste0("proportionTable_ECCC_", diffYears, "_", 
+                                          digest(studyArea),".csv"))
             if (!file.exists(prop_file)){
               proportionTable <- distECCC[["proportionTable"]] 
             } else {
@@ -157,7 +173,8 @@ calculateRate <- function(disturbanceParameters,
             # 4. Replace in DisturbanceRate the disturbanceRate by calculatedDisturbanceProportion for the
             # ones that are on the table
             tryCatch({sub[disturbanceOrigin == subProportionTable[["dataClass"]],
-                                  disturbanceRate := subProportionTable[["calculatedDisturbanceProportion"]]]}, error = function(e) {print("Edge case? Entering browser")
+                                  disturbanceRate := subProportionTable[["calculatedDisturbanceProportion"]]]}, 
+                     error = function(e) {print("Lacking current disturbance but not removed? Entering browser")
                                     browser()
                                     })
           } else {
