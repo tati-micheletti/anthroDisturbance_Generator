@@ -1,0 +1,18 @@
+structure(list(dataName = c("Energy", "settlements", "oilGas", 
+"roads", "roads", "roads", "roads", "oilGas", "oilGas", "mining", 
+"forestry"), dataClass = c("potentialPowerLines", "potentialSettlements", 
+"potentialPipeline", "potentialRoads", "potentialRoads", "potentialRoads", 
+"potentialRoads", "potentialOilGas", "potentialSeismicLines", 
+"potentialMining", "potentialCutblocks"), disturbanceType = c("Connecting", 
+"Enlarging", "Connecting", "Connecting", "Connecting", "Connecting", 
+"Connecting", "Generating", "Generating", "Generating", "Generating"
+), disturbanceRate = c(NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, 
+NA), disturbanceSize = c(NA_character_, NA_character_, NA_character_, 
+NA_character_, NA_character_, NA_character_, NA_character_, NA_character_, 
+NA_character_, NA_character_, NA_character_), disturbanceOrigin = c("windTurbines", 
+"settlements", "oilGas", "cutblocks", "windTurbines", "oilGas", 
+"mining", "oilGas", "seismicLines", "mining", "cutblocks"), disturbanceEnd = c("powerLines", 
+"", "pipeline", "roads", "roads", "roads", "roads", "", "", "", 
+""), disturbanceInterval = c(10L, 10L, 10L, 10L, 10L, 10L, 10L, 
+10L, 10L, 10L, 10L), resolutionVector = c(15L, 15L, 15L, 15L, 
+15L, 15L, 15L, 15L, 15L, 15L, 15L)), row.names = c(NA, -11L), class = "data.frame")
