@@ -192,7 +192,35 @@ defineModule(sim, list(
                            "for seismic lines (if useClusterMethod = TRUE). While this slows down ",
                            "runtime, the final linear structure is generated very similarly (but",
                            "with randomness to the structure of original lines in terms of number ",
-                           "of parallel and perpendicular lines."))
+                           "of parallel and perpendicular lines.")),
+    defineParameter(name = "diffYears", class = "character", default = "2010_2015", NA, NA,
+                    paste0("Suffix indicating the years compared for the",
+                           "difference calculation of disturbances rate. Needs to be ",
+                           "in the format OLDYEAR_NEWYEAR")),
+    defineParameter("archiveNEW", "character", paste0("ECCC_2015_anthro_dist_corrected_to_NT1_2016",
+                                                      "_final.zip"), NA, NA,
+                    "Filename of the newer archive dataset (zip file)."),
+    defineParameter("targetFileNEW", "character",
+                    c("BEADlines2015_NWT_corrected_to_NT1_2016.shp",
+                      "BEADpolys2015_NWT_corrected_to_NT1_2016.shp"), NA, NA,
+                    "Vector of target filenames within the newer archive to be extracted."),
+    defineParameter("urlNEW", "character",
+                    paste0("https://drive.google.com/file/d/",
+                           "1sxAa0wwwt7iwiHD7zB0DDnjfqyIQjKI2"), NA, NA,
+                    "URL to download the newer dataset archive."),
+    defineParameter("archiveOLD", "character",
+                    paste0("Boreal-ecosystem-anthropogenic-disturbance-vector-data-",
+                           "2008-2010.zip"), NA, NA,
+                    "Filename of the older archive dataset (zip file)."),
+    defineParameter("targetFileOLD", "character",
+                    c("EC_borealdisturbance_linear_2008_2010_FINAL_ALBERS.shp",
+                      "EC_borealdisturbance_polygonal_2008_2010_FINAL_ALBERS.shp"), NA, NA,
+                    "Vector of target filenames within the older archive to be extracted."),
+    defineParameter("urlOLD", "character",
+                    paste0("https://www.ec.gc.ca/data_donnees/STB-DGST/003/",
+                           "Boreal-ecosystem-anthropogenic-disturbance-vector-data-",
+                           "2008-OLD.zip"), NA, NA,
+                    "URL to download the older dataset archive.")
   ),
   inputObjects = bindrows(
     #expectsInput("objectName", "objectClass", "input object description", sourceURL, ...),
@@ -442,6 +470,32 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
         P(sim)$growthStepEnlargingPolys <- 1
       }
       
+      # Make sure the parameter diffYears has the correct format
+      parts <- strsplit(P(sim)$diffYears, "_")[[1]] # [[1]] extracts the vector
+      # Initialize difference variable
+      year_difference <- NA
+      is_valid <- FALSE
+      
+      # Check if we got exactly two parts
+      if (length(parts) == 2) {
+        # 2. Try to convert parts to numeric
+        # Suppress warnings in case conversion fails (we handle NAs explicitly)
+        num1 <- suppressWarnings(as.numeric(parts[1]))
+        num2 <- suppressWarnings(as.numeric(parts[2]))
+        # 3. Validate: Check if both parts are numbers and num1 < num2
+        if (!is.na(num1) && !is.na(num2)) { # Check if both are valid numbers
+          if (num1 < num2) { # Check if the first is smaller than the second
+            is_valid <- TRUE
+        } else {
+            stop("Validation failed: First year (", num1, ") is not smaller than the second year (", num2, ").\n", sep="")
+          }
+        } else {
+          stop("Validation failed: One or both parts ('", parts[1], "', '", parts[2], "') are not valid numbers.\n", sep="")
+        }
+      } else {
+        stop("Validation failed: String '", diffYears, "' does not contain exactly two years separated by '_' such as '2010_2015'.\n", sep="")
+      }
+      
       # schedule future event(s)
       sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingSize", eventPriority = 4)
       sim <- scheduleEvent(sim, time(sim), "anthroDisturbance_Generator", "calculatingRate", eventPriority = 4)
@@ -474,7 +528,15 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                    DisturbanceRate = sim$DisturbanceRate,
                                                    disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
                                                    maskOutLinesFromPolys = P(sim)$maskOutLinesFromPolys,
-                                                   aggregateSameDisturbances = P(sim)$aggregateSameDisturbances)
+                                                   aggregateSameDisturbances = P(sim)$aggregateSameDisturbances,
+                                                   diffYears = P(sim)$diffYears,
+                                                   archiveNEW = P(sim)$archiveNEW,
+                                                   targetFileNEW = P(sim)$targetFileNEW,
+                                                   urlNEW = P(sim)$urlNEW,
+                                                   archiveOLD = P(sim)$archiveOLD,
+                                                   targetFileOLD = P(sim)$targetFileOLD,
+                                                   urlOLD = P(sim)$urlOLD
+                                                   )
     },
     generatingDisturbances = {
       
@@ -652,12 +714,16 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   }
   
   if (!suppliedElsewhere(object = "disturbanceParameters", sim = sim)) {
-    sim$disturbanceParameters <- prepInputs(url = extractURL("disturbanceParameters"),
-                                            targetFile = "disturbanceParameters.csv",
-                                            destinationPath = dPath,
-                                            fun = "data.table::fread",
-                                            header = TRUE,
-                                            userTags = "disturbanceParameters")
+    sim$disturbanceParameters <- data.table(dget(file = paste0("https://raw.githubusercontent.com",
+                                                               "/tati-micheletti/anthroDisturbance_Generator",
+                                                               "/refs/heads/main/data/paramsGeneral.txt")))
+    # Example Disturbance Parameters for the whole NT1
+    # sim$disturbanceParameters <- prepInputs(url = extractURL("disturbanceParameters"),
+    #                                         targetFile = "disturbanceParameters.csv",
+    #                                         destinationPath = dPath,
+    #                                         fun = "data.table::fread",
+    #                                         header = TRUE,
+    #                                         userTags = "disturbanceParameters")
     
     message(crayon::red(paste0("disturbanceParameters was not supplied. Defaulting to an example from ",
                                " Northwest Territories")))
