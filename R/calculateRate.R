@@ -5,8 +5,8 @@ calculateRate <- function(disturbanceParameters,
                           RTM,
                           diffYears = "2010_2015",
                           destinationPath,
-                          overwriteDisturbanceLayers2015,
-                          overwriteDisturbanceLayers2010,
+                          overwriteDisturbanceLayersNEW,
+                          overwriteDisturbanceLayersOLD,
                           studyArea,
                           DisturbanceRate,
                           totalDisturbanceRate,
@@ -37,8 +37,8 @@ calculateRate <- function(disturbanceParameters,
   totalstudyAreaVAreaSqKm <- terra::expanse(uniStudyArea, unit = "km", transform = FALSE)
   
   if (is.null(DisturbanceRate)){ # When DisturbanceRate is NOT provided
-  if (diffYears == "2010_2015")
-    warning(paste0("While ECCC 2010 footprint layer covers the whole country, ECCC 2015",
+  if (diffYears == "OLD_2015")
+    warning(paste0("While ECCC OLD footprint layer covers the whole country, ECCC 2015",
                    " covers only the caribou ranges. This means that the 2015 layer will",
                    " return a biased value for disturbance than it actually is IF the study",
                    " area extends outside of a caribou range. Ideally, either 1) this layer ",
@@ -78,13 +78,13 @@ calculateRate <- function(disturbanceParameters,
     toUse <- data.table::dcast(toUse, dataClass ~ ., fun.agg = sum, 
                              value.var = c("yearOLD", "yearNEW"))
     # Need to recalculate proportions, though!
-    toUse[, disturbProportionInArea2010 := yearOLD/totalstudyAreaVAreaSqKm]
-    toUse[, disturbProportionInArea2015 := yearNEW/totalstudyAreaVAreaSqKm]
-    toUse[, totalProportionAreaDisturbed2010 := sum(disturbProportionInArea2010)]
-    toUse[, totalProportionAreaDisturbed2015 := sum(disturbProportionInArea2015)]
+    toUse[, disturbProportionInAreaOLD := yearOLD/totalstudyAreaVAreaSqKm]
+    toUse[, disturbProportionInAreaNEW := yearNEW/totalstudyAreaVAreaSqKm]
+    toUse[, totalProportionAreaDisturbedOLD := sum(disturbProportionInAreaOLD)]
+    toUse[, totalProportionAreaDisturbedNEW := sum(disturbProportionInAreaNEW)]
     
-    toUse <- toUse[, c("dataClass", "disturbProportionInArea2010", "disturbProportionInArea2015")]
-    toUse[, proportionAreaSqKmChangedPerYear := (disturbProportionInArea2015-disturbProportionInArea2010)/5]
+    toUse <- toUse[, c("dataClass", "disturbProportionInAreaOLD", "disturbProportionInAreaNEW")]
+    toUse[, proportionAreaSqKmChangedPerYear := (disturbProportionInAreaNEW-disturbProportionInAreaOLD)/5]
     # If any have negative growth, we ignore
     toUse[proportionAreaSqKmChangedPerYear < 0, proportionAreaSqKmChangedPerYear := 0] 
     #TODO implement reduction of disturbances
@@ -167,16 +167,20 @@ calculateRate <- function(disturbanceParameters,
             neededDistRates <- sub[["disturbanceOrigin"]]
             # 2. Match which of these have a value in proportionTable
             subProportionTable <- proportionTable[dataClass %in% neededDistRates,]
+            # 2b. If the disturbance exists but was negative, we remove it from the list. 
+            if (nrow(subProportionTable)==0){
+              message(paste0("The disturbance ", sub[["dataName"]], " of the sector ",
+                             sub[["disturbanceOrigin"]], " was virtually zero or negative in the area.",
+                             " Removing it from simulations."))
+              return(NULL)
+            }
             # 3. Calculate the percentage of the provided totalDisturbanceRate that belongs to each
             # class
             subProportionTable[, calculatedDisturbanceProportion := proportionOfTotalDisturbance*totalDisturbanceRate]
             # 4. Replace in DisturbanceRate the disturbanceRate by calculatedDisturbanceProportion for the
             # ones that are on the table
-            tryCatch({sub[disturbanceOrigin == subProportionTable[["dataClass"]],
-                                  disturbanceRate := subProportionTable[["calculatedDisturbanceProportion"]]]}, 
-                     error = function(e) {print("Lacking current disturbance but not removed? Entering browser")
-                                    browser()
-                                    })
+            sub[disturbanceOrigin == subProportionTable[["dataClass"]],
+                disturbanceRate := subProportionTable[["calculatedDisturbanceProportion"]]]
           } else {
             # 5. Modify the table, which should be an Input.
             # This process ensures we are not double counting disturbances, and that we can calculate the change 
