@@ -67,8 +67,9 @@ replaceListFast <- function(disturbanceList,
         }
         if (all(!is.null(pastDist),
                 !"createdInSimulationTime" %in% names(pastDist),
-                is(pastDist, "SpatVector")))
+                is(pastDist, "SpatVector"))){
           pastDist[["createdInSimulationTime"]] <- currentTime - 10
+        }
         classPast <- class(pastDist)
         classCurr <- class(currDist)
         if (any(is.null(pastDist),
