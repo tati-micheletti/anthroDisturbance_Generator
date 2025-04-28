@@ -231,14 +231,21 @@ disturbanceInfoFromECCC <- function(studyArea,
     names(proportionTable) <- c("dataClass", "proportionAreaSqKmChangedPerYear")
     
     # If we have anything reducing from one year to the next, at this time we will remove from here
-    if (any(proportionTable[["proportionAreaSqKmChangedPerYear"]] < 0)){
-      whichDistReducing <- proportionTable[["dataClass"]][proportionTable[["proportionAreaSqKmChangedPerYear"]] < 0]
-      # Percentage of total disturbance belonging to each sector
-      warning(paste0("The disturbance(s) '", paste0(whichDistReducing, collapse = ", "), "' are reducing ",
-                     "between the years OLD and NEW in the study area according to ECCC data. These ",
-                     "will be excluded from the calculation of totalDisturbance"), immediate. = TRUE)
-      proportionTable <- proportionTable[proportionAreaSqKmChangedPerYear >= 0, ]
-    }
+    proportionTable[["proportionAreaSqKmChangedPerYear"]][is.na(proportionTable[["proportionAreaSqKmChangedPerYear"]])] <- 0
+    tryCatch({
+      if (any(proportionTable[["proportionAreaSqKmChangedPerYear"]] < 0)){
+        whichDistReducing <- proportionTable[["dataClass"]][proportionTable[["proportionAreaSqKmChangedPerYear"]] < 0]
+        # Percentage of total disturbance belonging to each sector
+        warning(paste0("The disturbance(s) '", paste0(whichDistReducing, collapse = ", "), "' are reducing ",
+                       "between the years OLD and NEW in the study area according to ECCC data. These ",
+                       "will be excluded from the calculation of totalDisturbance"), immediate. = TRUE)
+        proportionTable <- proportionTable[proportionAreaSqKmChangedPerYear >= 0, ]
+      }
+      
+    }, error = function(e){
+      print("Error in getting disturbance data. Debug!")
+      browser()
+    })
     # ttDistubanceRate: total disturbance proportion across the studyArea per year
     ttDistubanceRate <- sum(proportionTable[["proportionAreaSqKmChangedPerYear"]])
     proportionTable[, proportionOfTotalDisturbance := proportionAreaSqKmChangedPerYear/ttDistubanceRate]
