@@ -54,7 +54,11 @@ createModObject <- function(data,
     if (length(dataName) == 0){
       dt <- NULL
     } else {
-      dt <- do.call(what = fun, args = list(file.path(pathInput, dataName)))
+      dt <- tryCatch({
+        do.call(what = fun, args = list(file.path(pathInput, dataName)))
+        }, error = function(e){
+        NULL
+      })
     }
     if (!is.null(dt)){
       message(paste0(data, " loaded from " ,

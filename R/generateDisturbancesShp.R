@@ -581,7 +581,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
               # Need to do by potential as for each potential, cluster numbers are repeated
               totalBuff3mArea <- sum(cropLayFinalDT$buff3mArea)
               cropLayFinalDT[, PercBuff3mAreaOfTotalM2 := 100*(sumBuff3mAreaM2/totalBuff3mArea),  by = "Pot_Clus"]
-              if (sum(unique(cropLayFinalDT[, c("Pot_Clus","PercBuff3mAreaOfTotalM2")]$PercBuff3mAreaOfTotalM2)) > 100){ 
+              if (sum(unique(cropLayFinalDT[, c("Pot_Clus","PercBuff3mAreaOfTotalM2")]$PercBuff3mAreaOfTotalM2)) > 100.001){ 
                 message(paste0("Total contribution of clusters in total area is higher than 100%.",
                                "Something may be wrong. Entering debug mode."))
                 browser()
@@ -603,12 +603,16 @@ generateDisturbancesShp <- function(disturbanceParameters,
               }
               selectedClusters <- NULL
               for (uniqueSampClus in unique(sampledClusters)){
-                toChoseFrom <- unique(cropLayFinalDT[Potential == sampledClusters[uniqueSampClus], Pot_Clus])
+                toChoseFrom <- unique(cropLayFinalDT[Potential == uniqueSampClus, Pot_Clus])
                 howManyINeed <- sum(sampledClusters == uniqueSampClus)
-                selectedClusters <- c(selectedClusters, 
-                                      sample(toChoseFrom, 
-                                             replace = TRUE,
-                                             size = howManyINeed))
+                if (length(toChoseFrom) == 1){
+                  sampledOnes <- rep(toChoseFrom, times = howManyINeed)
+                } else {
+                  sampledOnes <- sample(toChoseFrom,
+                                        replace = TRUE,
+                                        size = howManyINeed)
+                }
+                selectedClusters <- c(selectedClusters,sampledOnes)
               }              
               #TODO Here I can parallelize using future!
               newLines <- simulateLines(Lines = cropLayFinal[cropLayFinal$Pot_Clus %in% selectedClusters, ],
