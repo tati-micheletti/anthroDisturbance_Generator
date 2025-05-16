@@ -25,7 +25,7 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
-  reqdPkgs = list("SpaDES.core (>=1.0.10)", "ggplot2", 
+  reqdPkgs = list("SpaDES.core (>= 2.1.5.9003)", "ggplot2", "googledrive",
                   "data.table", "PredictiveEcology/reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
                   "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm",
