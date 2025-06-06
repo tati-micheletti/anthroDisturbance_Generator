@@ -651,7 +651,6 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        runClusteringInParallel = P(sim)$runClusteringInParallel,
                                                        refinedStructure = P(sim)$refinedStructure)
         }
-        
         sim$currentDisturbanceLayer[[paste0("Year", time(sim))]] <- mod$updatedLayers$currentDisturbanceLayer
       } else {
         message("No disturbances scheduled for this year")
@@ -777,7 +776,6 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
               immediate. = TRUE)
     }
   }
-  
   return(invisible(sim))
 }
 

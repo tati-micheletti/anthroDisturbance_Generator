@@ -1346,7 +1346,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
     # Cleanup the NULLS!
     curDistRas <- cleanupList(curDistRas, 
                               outter = TRUE, 
-                              inner = FALSE, 
+                              inner = TRUE, 
                               cleanEmpty = TRUE, 
                               nullEmpty = FALSE)
 
@@ -1416,7 +1416,14 @@ generateDisturbancesShp <- function(disturbanceParameters,
   } else {
     seismicLinesFirstYear <- NULL
   }
-  list(individuaLayers = individuaLayers, 
+
+  individuaLayers <- cleanupList(individuaLayers, 
+                              outter = TRUE, 
+                              inner = TRUE, 
+                              cleanEmpty = TRUE, 
+                              nullEmpty = FALSE)
+  
+  return(list(individuaLayers = individuaLayers, 
        currentDisturbanceLayer = curDistRas,
-       seismicLinesFirstYear = seismicLinesFirstYear)
+       seismicLinesFirstYear = seismicLinesFirstYear))
 }
