@@ -28,8 +28,8 @@ defineModule(sim, list(
   reqdPkgs = list("SpaDES.core (>= 2.1.5.9003)", "ggplot2", "googledrive",
                   "data.table", "PredictiveEcology/reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
-                  "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm",
-                  "foreach", "doParallel", "digest"), #TODO review needed packages.
+                  "fasterize", "stars", "nngeo", "tictoc", "roads", "spaths", "truncnorm",
+                  "foreach", "doParallel", "digest"),
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -651,7 +651,6 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        runClusteringInParallel = P(sim)$runClusteringInParallel,
                                                        refinedStructure = P(sim)$refinedStructure)
         }
-        
         sim$currentDisturbanceLayer[[paste0("Year", time(sim))]] <- mod$updatedLayers$currentDisturbanceLayer
       } else {
         message("No disturbances scheduled for this year")
@@ -777,7 +776,6 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
               immediate. = TRUE)
     }
   }
-  
   return(invisible(sim))
 }
 

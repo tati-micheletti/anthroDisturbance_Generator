@@ -5,7 +5,12 @@ cleanupList <- function(aList,
                         nullEmpty = TRUE){
   if (inner){
     cleanedList1 <- lapply(aList, function(innerList) {
-      Filter(Negate(is.null), innerList)
+      filtered_list <- Filter(Negate(is.null), innerList)
+      if (length(filtered_list) == 0) {
+        NULL # Return NULL if the list is empty after filtering
+      } else {
+        filtered_list # Otherwise, return the filtered list
+      }
     })
   } else {
     cleanedList1 <- copy(aList)
