@@ -8,7 +8,7 @@ library(sp)
 
 # Set up temporary output directory and clear previous disturbance files
 output_dir <- tempdir()
-Paths <- list(outputPath = output_dir)
+Paths <<- list(outputPath = output_dir) # Use <<- to assign in the global environment
 # Clean up any existing disturbance files
 existing <- list.files(output_dir, pattern = "^disturbances_", full.names = TRUE)
 if (length(existing)) unlink(existing, recursive = TRUE)
