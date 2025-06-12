@@ -23,7 +23,7 @@ simulateLines <- function(Lines, distThreshold = 5000,
       print(paste0("length(nLines) is > 1. Maybe there is a problem? Investigate.",
                    "This should be one value per Cluster_Potential as total lines for that",
                    "cluster... Entering debug mode."))
-      browser()
+      if (interactive()) browser()
     }
     xlim <- c(min(cent[,"x"]), max(cent[,"x"]))
     ylim <- c(min(cent[,"y"]), max(cent[,"y"]))
@@ -64,24 +64,24 @@ simulateLines <- function(Lines, distThreshold = 5000,
         }
       }
 
-      SD <- sd(perim(exSet))
+      SD <- sd(lengths(exSet))
       # Catch error
       if (any(is.na(SD))){
         print(paste0("Standard deviation of lines for Pot_Clus ", potclus," is NA.",
                      "This should not happen. ",
                      "Entering debug mode."))
-        browser()
+        if (interactive()) browser()
       }
 
       n_parallel_pairs <- parallel_count
       n_perpendicular_pairs <- perpendicular_count
       lineLengths <- truncnorm::rtruncnorm(nLines,
-                                           a = min(perim(exSet)),
-                                           b = max(perim(exSet)),
-                                           mean = mean(perim(exSet)),
+                                           a = min(lengths(exSet)),
+                                           b = max(lengths(exSet)),
+                                           mean = mean(lengths(exSet)),
                                            sd = if (!is.na(SD)) SD else 0)
     } else {
-      lineLengths <- perim(exSet)
+      lineLengths <- lengths(exSet)
       if (length(lineLengths) > 1) stop("Something went wrong. Please debug.")
     }
 
@@ -175,7 +175,7 @@ simulateLines <- function(Lines, distThreshold = 5000,
       simulatedLines <- lapply(seq_along(angles), function(indexAngle){
         if (is.na(lineLengths[indexAngle])) {
           print(paste0("lineLenghts index ",indexAngle," is NA (simulateLines.R). Debug."))
-          browser()
+          #if (interactive()) browser()
         }
       generatedLines <-  generateLine(angle[indexAngle], length = lineLengths[indexAngle], 
                                       xlim = xlim, 
@@ -188,20 +188,19 @@ simulateLines <- function(Lines, distThreshold = 5000,
     # Combine the simulated lines into a single `SpatVector`
     sLines <- do.call(rbind, simulatedLines)
     sLines$Pot_Clus <- unique(exSet$Pot_Clus)
-    sLines$lineLength <- perim(sLines)
+    sLines$lineLength <- lengths(sLines)
     # if (exists("createdLines")){ # How can they exist?!?!
       # createdLines <- rbind(createdLines, sLines)
     # } else {
       createdLines <- sLines 
     # }
     # createdLines[createdLines$Pot_Clus == potclus, "Pot_Clus"] <- paste0(unique(exSet$Potential), "_",potclus)
-    # createdLines[createdLines$Pot_Clus == potclus, "calculatedLength"] <- perim(createdLines[createdLines$Pot_Clus == potclus, ])
+    # createdLines[createdLines$Pot_Clus == potclus, "calculatedLength"] <- lengths(createdLines[createdLines$Pot_Clus == potclus, ])
     # createdLines[createdLines$Pot_Clus == potclus, "angles"] <- angles
       createdLines[, "Pot_Clus"] <- paste0(unique(exSet$Potential), "_",potclus)
-      createdLines[, "calculatedLength"] <- perim(createdLines[createdLines$Pot_Clus == potclus, ])
+      createdLines[, "calculatedLength"] <- lengths(createdLines[createdLines$Pot_Clus == potclus, ])
       createdLines[, "angles"] <- angles
       createdLines[, "Potential"] <- sub("_.*", "", createdLines$Pot_Clus)
   }
   return(createdLines)
 }
-
