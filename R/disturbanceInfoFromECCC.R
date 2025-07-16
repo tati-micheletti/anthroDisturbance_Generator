@@ -108,8 +108,19 @@ disturbanceInfoFromECCC <- function(studyArea,
   }
   
   # Bind both data so I can extract the area 
-  AD_NEW_all <- rbind(AD_NEW_Lines, AD_NEW_Polys)
-  AD_OLD_all <- rbind(AD_OLD_Lines, AD_OLD_Polys)
+  combine_geometries <- function(line_sv, poly_sv) {
+    # Both should be polygons after buffering - convert explicitly
+    line_sv <- terra::as.polygons(line_sv)
+    poly_sv <- terra::as.polygons(poly_sv)
+    
+    # Combine using terra's vect list constructor
+    combined <- terra::vect(list(line_sv, poly_sv))
+    return(combined)
+  }
+  
+  # Then in your function:
+  AD_NEW_all <- combine_geometries(AD_NEW_Lines, AD_NEW_Polys)
+  AD_OLD_all <- combine_geometries(AD_OLD_Lines, AD_OLD_Polys)
   
   # Class conversion needs to happen before aggregation
   # Cleanup the data. Some classes are not in both datasets.
@@ -135,9 +146,11 @@ disturbanceInfoFromECCC <- function(studyArea,
   # We assume they are newer rather than older.
   allClassesAvailable <- unique(AD_NEW_all$Class)
   nonPotLay <- extractNonPotentialLayers(disturbanceList)
-  laysToADD <- lapply(1:nrow(nonPotLay), function(INDEX){
-    layIndex <- disturbanceList[[nonPotLay[INDEX, Sector]]][[nonPotLay[INDEX, dataClass]]]
-    if (geomtype(layIndex) != geomtype(AD_NEW_all)){
+  laysToADD <- lapply(seq_len(nrow(nonPotLay)), function(INDEX) {
+    sector <- nonPotLay[INDEX, Sector]
+    dataClass <- nonPotLay[INDEX, dataClass]
+    layIndex <- disturbanceList[[sector]][[dataClass]]
+    if (geomtype(layIndex) != geomtype(AD_NEW_all)) {
       layIndex <- terra::buffer(x = layIndex, width = bufferSize)
     }
     return(layIndex)
@@ -226,9 +239,16 @@ disturbanceInfoFromECCC <- function(studyArea,
     toUse[, proportionAreaSqKmChangedPerYear := (disturbProportionInAreaNEW-disturbProportionInAreaOLD)/yearDistance]
     toUse <- toUse[, c("dataClass", "proportionAreaSqKmChangedPerYear")]
     
-    proportionTable <- dcast(toUse, dataClass ~ ., fun.agg = sum, 
-                     value.var = "proportionAreaSqKmChangedPerYear")
-    names(proportionTable) <- c("dataClass", "proportionAreaSqKmChangedPerYear")
+    if (nrow(toUse) > 0) {
+      proportionTable <- dcast(toUse, dataClass ~ ., fun.agg = sum, 
+                               value.var = "proportionAreaSqKmChangedPerYear")
+      setnames(proportionTable, c("dataClass", "proportionAreaSqKmChangedPerYear"))
+    } else {
+      proportionTable <- data.table(
+        dataClass = character(),
+        proportionAreaSqKmChangedPerYear = numeric()
+      )
+    }
     
     # If we have anything reducing from one year to the next, at this time we will remove from here
     proportionTable[["proportionAreaSqKmChangedPerYear"]][is.na(proportionTable[["proportionAreaSqKmChangedPerYear"]])] <- 0
