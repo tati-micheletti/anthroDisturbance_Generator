@@ -36,9 +36,9 @@ calculateSize <- function(disturbanceParameters,
         sub <- NULL
       # }
     } else {
-      if (class(lay) %in% c("RasterLayer", "SpatRaster")) {
+      if (inherits(lay, "RasterLayer") || inherits(lay, "SpatRaster")) {
         message(paste0("The layer ", sub[["dataClass"]], " is not a vector. Trying to convert."))
-        if (lay %in% "RasterLayer") lay <- rast(lay)
+        if (inherits(lay, "RasterLayer")) lay <- rast(lay)
         lay <- as.polygons(lay, dissolve = FALSE)
       }
       if (geomtype(lay) %in% c("lines")){
@@ -46,8 +46,17 @@ calculateSize <- function(disturbanceParameters,
       } else {
         allAreas <- terra::expanse(lay, transform = FALSE, unit = "m")
       }
-      SDcalc <- if (is.na(round(sd(allAreas), 2))) 0 else round(sd(allAreas), 2)
-      sub[, disturbanceSize := paste0("rtnorm(1, ", round(mean(allAreas), 2), ", ", SDcalc, ", lower = 0)")]
+      
+      meanArea <- round(mean(allAreas), 2)
+      SDArea <- ifelse(is.na(round(sd(allAreas), 2)), 0, round(sd(allAreas), 2))
+      
+      if (meanArea == 0 && SDArea == 0) {
+        epsilon <- 1  # small positive area to prevent zero distribution parameters
+        sub[, disturbanceSize := paste0("rtnorm(1, ", epsilon, ", 0, lower = 0)")]
+        message(crayon::yellow("Zero mean/SD: Assigned epsilon size for numeric stability."))
+      } else {
+        sub[, disturbanceSize := paste0("rtnorm(1, ", meanArea, ", ", SDArea, ", lower = 0)")]
+      }
     }
     return(sub)
   }))
