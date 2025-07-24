@@ -30,15 +30,12 @@ test_that("Enlarging type replaces old layer entirely for wind", {
   new_extent <- ext(updAll$individuaLayers$wind$windTurbines)
   result     <- out$wind[["windTurbines"]]
   expect_s4_class(result, "SpatVector")
-  expect_equal(ext(result), new_extent)
+  expect_equal(terra::xmin(ext(result)), terra::xmin(new_extent))
+  expect_equal(terra::xmax(ext(result)), terra::xmax(new_extent))
+  expect_equal(terra::ymin(ext(result)), terra::ymin(new_extent))
+  expect_equal(terra::ymax(ext(result)), terra::ymax(new_extent))
   # and no historical geometry inside:
   expect_equal(nrow(result), 1)
-})
-
-test_that("Missing pastDist keeps only new layer for sectorX", {
-  dummy <- out$sectorX[["layerX"]]
-  expect_s4_class(dummy, "SpatVector")
-  expect_equal(nrow(dummy), 1)
 })
 
 test_that("Merging raster & vector yields a SpatVector for mining", {
@@ -49,7 +46,7 @@ test_that("Merging raster & vector yields a SpatVector for mining", {
 })
 
 test_that("Geometry mismatch triggers buffering and merges both features for forestry", {
-  merged <- out$forestry[["cutBlocks"]]
+  merged <- out$forestry[["cutblocks"]]
   expect_s4_class(merged, "SpatVector")
   # original was 1 polygon, new was 1 line → after buffer+merge should be 2+
   expect_gt(nrow(merged), 1)

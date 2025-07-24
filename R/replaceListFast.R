@@ -92,8 +92,8 @@ replaceListFast <- function(disturbanceList,
           unified <- c(pastDist, currDist)[[1]]
         } else { # Need to merge them!
           # === Harmonize any rasters to vectors, then rbind, then add Class ===
-          if (any(classPast %in% c("RasterLayer", "SpatRaster"),
-                  classCurr %in% c("RasterLayer", "SpatRaster"))) {
+          rasterClasses <- c("RasterLayer", "SpatRaster")
+          if (any(classPast %in% rasterClasses) || any(classCurr %in% rasterClasses)) {
             # Convert both sides that are rasters into polygons
             if (classPast %in% c("RasterLayer", "SpatRaster")) {
               pastDist <- as.polygons(pastDist)
@@ -109,10 +109,6 @@ replaceListFast <- function(disturbanceList,
               }
             }
             unified <- rbind(pastDist, currDist)
-            # ensure a Class column
-            if (!"Class" %in% names(unified)) {
-              unified[["Class"]] <- layName
-            }
           } else {
             # Objects share the same class and vectors
             if (geomtype(pastDist) != geomtype(currDist)) { # Works only if both are vectors!
@@ -151,6 +147,9 @@ replaceListFast <- function(disturbanceList,
             }
             tictoc::toc()
           }
+        }
+        if (!is.null(unified)) {
+          unified[["Class"]] <- rep(layName, nrow(unified))
         }
         return(unified)
       })
