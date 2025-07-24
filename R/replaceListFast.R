@@ -114,17 +114,17 @@ replaceListFast <- function(disturbanceList,
             if (geomtype(pastDist) != geomtype(currDist)) { # Works only if both are vectors!
               # Make sure that all are buffered, even if just a little
               wid <- 0.0000000003
-              if (geomtype(pastDist) != "polygons") {
+              if (nrow(pastDist) > 0 && geomtype(pastDist) != "polygons") {
                 pastDistBuf <- terra::buffer(pastDist, width = wid)
                 while (any(is.na(as.vector(ext(pastDistBuf))))) {
-                  message(paste0("Minimum buffering size current disturbances (", wid,
+                  message(paste0("Minimum buffering size current disturbances (", wid, 
                                  ") failed. Increasing buffering size..."))
                   wid <- wid + wid
                   pastDistBuf <- terra::buffer(pastDist, width = wid)
                 }
                 pastDist <- pastDistBuf
               }
-              if (geomtype(currDist) != "polygons") {
+              if (nrow(currDist) > 0 && geomtype(currDist) != "polygons") {
                 currDistBuf <- terra::buffer(currDist, width = wid)
                 while (any(is.na(as.vector(ext(currDistBuf))))) {
                   message(paste0("Minimum buffering size for past disturbances (", wid,
