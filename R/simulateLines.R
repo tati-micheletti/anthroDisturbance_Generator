@@ -16,7 +16,7 @@ simulateLines <- function(Lines, distThreshold = 5000,
     centBuff <- terra::buffer(x = clCentr, width = buffDist)
     centB <- terra::spatSample(centBuff, size = NROW(clCentr), 
                                method = "random") # Here we need to get a random point within this buffered area!
-    cent <- crds(centB)
+    cent <- terra::crds(centB)
     nLines <- NROW(exSet)
 
     if (length(nLines) > 1){
@@ -122,7 +122,7 @@ simulateLines <- function(Lines, distThreshold = 5000,
             random_index <- sample(1:n_points, 1)
             newLineStart <- boundaryL1[random_index]
             # Update xlim/ylim for the generateLine function based on this point
-            new_coords <- crds(newLineStart)
+            new_coords <- terra::crds(newLineStart)
             simulatedLines[[ind2]] <- generateLine(angle = angle + runif(1, -tolerance, tolerance), 
                                                    length = lineLengths[ind2], 
                                                    xlim = c(new_coords[1], new_coords[1]), 
@@ -148,7 +148,7 @@ simulateLines <- function(Lines, distThreshold = 5000,
             random_index <- sample(1:n_points, 1)
             newLineStart <- boundaryL1[random_index]
             # Update xlim/ylim for the generateLine function based on this point
-            new_coords <- crds(newLineStart)
+            new_coords <- terra::crds(newLineStart)
             simulatedLines[[ind2]] <- generateLine(angle = angle + 90 + runif(1, -tolerance, tolerance), 
                                                    length = lineLengths[ind2], 
                                                    xlim = c(new_coords[1], new_coords[1]), 

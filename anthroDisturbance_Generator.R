@@ -27,8 +27,8 @@ defineModule(sim, list(
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
   reqdPkgs = list("SpaDES.core (>= 2.1.5.9003)", "ggplot2", "googledrive",
                   "data.table", "PredictiveEcology/reproducible",
-                  "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
-                  "fasterize", "stars", "nngeo", "tictoc", "roads", "spaths", "truncnorm",
+                  "raster", "terra", "crayon", "sf", 
+                  "fasterize", "tictoc", "roads", "spaths", "truncnorm",
                   "foreach", "doParallel", "digest"),
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
