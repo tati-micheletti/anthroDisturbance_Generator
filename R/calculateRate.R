@@ -5,8 +5,8 @@ calculateRate <- function(disturbanceParameters,
                           RTM,
                           diffYears = "2010_2015",
                           destinationPath,
-                          overwriteDisturbanceLayersNEW,
-                          overwriteDisturbanceLayersOLD,
+                          #overwriteDisturbanceLayersNEW, # currently not in use
+                          #overwriteDisturbanceLayersOLD,
                           studyArea,
                           DisturbanceRate,
                           totalDisturbanceRate,
@@ -19,6 +19,10 @@ calculateRate <- function(disturbanceParameters,
                           archiveOLD,
                           targetFileOLD,
                           urlOLD){
+  if (length(whichToUpdate) == 0) {
+    message("calculateRate: no rows need updating, returning original table.")
+    return(disturbanceParameters)
+  }
   
   if (all(!is.null(DisturbanceRate), !is.null(totalDisturbanceRate)))
     stop("Both DisturbanceRate and totalDisturbanceRate were provided. Please provide only one,",
@@ -51,32 +55,43 @@ calculateRate <- function(disturbanceParameters,
                                  paste0("anthropogenicDisturbance_ECCC_", 
                                         diffYears,"_", digest(studyArea),".csv"))
     if (!file.exists(AD_changed_file)){
-      distECCC <- disturbanceInfoFromECCC(studyArea = studyArea, 
-                                          RTM = RTM,
-                                          disturbanceList = disturbanceList,
-                                          totalstudyAreaVAreaSqKm = totalstudyAreaVAreaSqKm,
-                                          classesAvailable = classesAvailable,
-                                          destinationPath = destinationPath,
-                                          bufferedDisturbances = disturbanceRateRelatesToBufferedArea,
-                                          maskOutLinesFromPolys = maskOutLinesFromPolys,
-                                          aggregateSameDisturbances = aggregateSameDisturbances,
-                                          archiveNEW = archiveNEW,
-                                          diffYears = diffYears,
-                                          targetFileNEW = targetFileNEW,
-                                          urlNEW = urlNEW,
-                                          archiveOLD = archiveOLD,
-                                          targetFileOLD = targetFileOLD,
-                                          urlOLD = urlOLD)
+      distECCC <- disturbanceInfoFromECCC(
+        studyArea                     = studyArea, 
+        RTM                           = RTM,
+        disturbanceList               = disturbanceList,
+        totalstudyAreaVAreaSqKm       = totalstudyAreaVAreaSqKm,
+        classesAvailable              = classesAvailable,
+        destinationPath               = destinationPath,
+        bufferedDisturbances          = disturbanceRateRelatesToBufferedArea,
+        maskOutLinesFromPolys         = maskOutLinesFromPolys,
+        aggregateSameDisturbances     = aggregateSameDisturbances,
+        #overwriteDisturbanceLayersNEW = overwriteDisturbanceLayersNEW,
+        #overwriteDisturbanceLayersOLD = overwriteDisturbanceLayersOLD,
+        archiveNEW                    = archiveNEW,
+        diffYears                     = diffYears,
+        targetFileNEW                 = targetFileNEW,
+        urlNEW                        = urlNEW,
+        archiveOLD                    = archiveOLD,
+        targetFileOLD                 = targetFileOLD,
+        urlOLD                        = urlOLD
+      )
       
       AD_changed <- distECCC[["AD_changed"]]
     } else {
       AD_changed <- data.table::fread(AD_changed_file)
     }
+    if (nrow(AD_changed[Class %in% toLookFor$classToSearch]) == 0) {
+        message("No historical ECCC disturbance for these classes → setting rate to zero")
+        # set disturbanceRate = 0 for all rows we intended to update
+          disturbanceParameters[whichToUpdate, disturbanceRate := 0]
+        return(disturbanceParameters)
+      }
+    
     toFill <- AD_changed[Class %in% toLookFor[["classToSearch"]]]
     toUse <- merge(toFill, toLookFor[, c("classToSearch", "dataClass")], all.x = TRUE, 
                    by.x = "Class", by.y = "classToSearch")
     toUse <- data.table::dcast(toUse, dataClass ~ ., fun.agg = sum, 
-                             value.var = c("yearOLD", "yearNEW"))
+                               value.var = c("yearOLD", "yearNEW"))
     # Need to recalculate proportions, though!
     toUse[, disturbProportionInAreaOLD := yearOLD/totalstudyAreaVAreaSqKm]
     toUse[, disturbProportionInAreaNEW := yearNEW/totalstudyAreaVAreaSqKm]
@@ -200,10 +215,24 @@ calculateRate <- function(disturbanceParameters,
         } else {
           # One can also pass the parameter totalDisturbanceRate. If so, we use the ECCC data to calculate
           # the % each disturbance needs to be to achieve (more or less) the total expected disturbance 
-          updatedVal <- DisturbanceRate[dataName == sub[["dataName"]] & 
-                                          dataClass == sub[["dataClass"]] & 
-                                          disturbanceType == sub[["disturbanceType"]] & 
-                                          disturbanceOrigin == sub[["disturbanceOrigin"]], "disturbanceRate"]
+          subDR <- DisturbanceRate[
+            dataName == sub$dataName &
+              dataClass == sub$dataClass &
+              disturbanceType == sub$disturbanceType &
+              disturbanceOrigin == sub$disturbanceOrigin
+          ]
+          if (nrow(subDR) == 0) {
+              warning("No matching row in DisturbanceRate for ",
+                                         sub$dataName, "/", sub$dataClass, "; setting rate to zero",
+                                         immediate. = TRUE)
+              sub[, disturbanceRate := 0]
+              return(sub)
+          }
+          if (nrow(subDR) > 1) {
+            warning("Multiple matches in DisturbanceRate for ", 
+                    sub$dataName, "/", sub$dataClass, "; using first")
+          }
+          updatedVal <- subDR[1, disturbanceRate]
           sub[, disturbanceRate := updatedVal]
           # Here the disturbance rate is already in percent!
           message(paste0("Using yearly disturbance rate for ", sub[["dataName"]],
