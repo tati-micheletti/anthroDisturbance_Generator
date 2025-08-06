@@ -1,8 +1,8 @@
-createCropLayFinalYear1_new <- function(Lay, 
-                                        potLayTopValid, 
-                                        runClusteringInParallel, 
-                                        clusterDistance, 
-                                        studyAreaHash){
+createCropLayFinalYear1 <- function(Lay, 
+                                    potLayTopValid, 
+                                    runClusteringInParallel, 
+                                    clusterDistance, 
+                                    studyAreaHash){
   
   # 0. Input validation
   if (!is.numeric(clusterDistance) || length(clusterDistance) != 1) {
@@ -20,6 +20,27 @@ createCropLayFinalYear1_new <- function(Lay,
     warning("createCropLayFinalYear1: no input lines fall within potLayTopValid — returning empty SpatVector")
     return(Lay[0, ])
   }
+  
+  # guard against two $potential columns from `cropLay <- Cache(postProcessTo, Lay, potLayTopValid)` 
+  
+  # find any columns whose names start with "Potential"
+  potCols <- grep("^Potential", names(cropLay), value = TRUE)
+  if (length(potCols) == 0) {
+    stop("No 'Potential' column found after cropping—cannot cluster.")
+  }
+  if (length(potCols) > 1) {
+  # pick the second (terra suffix .1) one, rename it back to “Potential”, drop the other
+    chosen <- potCols[2]
+    names(cropLay)[names(cropLay) == chosen] <- "Potential"
+    dropCols <- setdiff(potCols, chosen)
+    cropLay <- cropLay[, setdiff(names(cropLay), dropCols)]
+  }
+
+  if (!"Potential" %in% names(cropLay) || nrow(cropLay) == 0) {
+    warning("createCropLayFinalYear1(): no valid Potential values → returning empty SpatVector")
+    return(list(lines = Lay[0, ], availableArea = potLayTopValid))
+  }
+  
   
   # 2. Convert all lines to polygons to exclude them from selecting the random point
   cropLayBuf <- Cache(buffer, cropLay, width = 50)
@@ -65,8 +86,16 @@ createCropLayFinalYear1_new <- function(Lay,
     cropLay <- cropLay[-unique(to_remove), ]
   }
   # End overlapping removal
+
+  # guard against cropLayFinal collapsing to NULL from missing $Potential column
+  pots <- unique(cropLay$Potential)
+  if (length(pots) == 0) {
+    warning("createCropLayFinalYear1(): no valid Potential values → returning empty SpatVector")
+    return(list(lines = Lay[0, ], availableArea = potLayTopValid))
+  }
   
   # Loop through the potentials, and make clusters
+  
   cropLayFinal <- do.call(rbind, lapply(unique(cropLay$Potential), function(Pot){
     cropLayInt <- Cache(clusterLines, cropLay[cropLay$Potential == Pot,], 
                         distThreshold = clusterDistance, 
