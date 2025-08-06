@@ -31,6 +31,10 @@ simulateLines <- function(Lines, distThreshold = 5000,
     ylim <- c(min(cent[,"y"]), max(cent[,"y"]))
     
     angles <- numeric(NROW(exSet))
+    
+    n_parallel_pairs     <- 0L
+    n_perpendicular_pairs <- 0L
+    
     for (ii in 1:NROW(exSet)) {
       angles[ii] <- calculateLineAngle(exSet[ii, ])
     }
