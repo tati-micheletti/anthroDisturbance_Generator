@@ -81,11 +81,11 @@ calculateRate <- function(disturbanceParameters,
       AD_changed <- data.table::fread(AD_changed_file)
     }
     if (nrow(AD_changed[Class %in% toLookFor$classToSearch]) == 0) {
-        message("No historical ECCC disturbance for these classes → setting rate to zero")
-        # set disturbanceRate = 0 for all rows we intended to update
-          disturbanceParameters[whichToUpdate, disturbanceRate := 0]
-        return(disturbanceParameters)
-      }
+      warning("No historical ECCC disturbance for these classes → setting rate to zero")
+      # set disturbanceRate = 0 for all rows we intended to update
+      disturbanceParameters[whichToUpdate, disturbanceRate := 0]
+      return(disturbanceParameters)
+    }
     
     toFill <- AD_changed[Class %in% toLookFor[["classToSearch"]]]
     toUse <- merge(toFill, toLookFor[, c("classToSearch", "dataClass")], all.x = TRUE, 
@@ -200,10 +200,16 @@ calculateRate <- function(disturbanceParameters,
             # 5. Modify the table, which should be an Input.
             # This process ensures we are not double counting disturbances, and that we can calculate the change 
             # in disturbance per class, which we need to simulate the new disturbances coming.
-            toUseSub <- toUse[dataClass %in% sub[["disturbanceOrigin"]], ]
-            if (NROW(toUseSub) > 1) {
-              warning("Repeated data found in the process. Please debug", immediate. = TRUE)
-              browser()
+            toUseSub <- toUse[dataClass %in% sub[["disturbanceOrigin"]]]
+            if (NROW(toUseSub) == 0L) {
+              warning("No ECCC-derived rate for ", sub$dataName, "/", sub$dataClass, 
+                      "; setting rate to zero", immediate. = TRUE)
+              sub[, disturbanceRate := 0]
+            } else {
+              if (NROW(toUseSub) > 1L)
+                warning("Repeated ECCC rows for ", sub$dataName, "/", sub$dataClass, 
+                        "; using the first")
+              sub[, disturbanceRate := 100 * toUseSub[1, proportionAreaSqKmChangedPerYear]]
             }
             # Here the disturbance rate is in proportion. Needs to be multiplied for %!
             sub[, disturbanceRate := 100*toUseSub[["proportionAreaSqKmChangedPerYear"]]]
@@ -222,11 +228,11 @@ calculateRate <- function(disturbanceParameters,
               disturbanceOrigin == sub$disturbanceOrigin
           ]
           if (nrow(subDR) == 0) {
-              warning("No matching row in DisturbanceRate for ",
-                                         sub$dataName, "/", sub$dataClass, "; setting rate to zero",
-                                         immediate. = TRUE)
-              sub[, disturbanceRate := 0]
-              return(sub)
+            warning("No matching row in DisturbanceRate for ",
+                    sub$dataName, "/", sub$dataClass, "; setting rate to zero",
+                    immediate. = TRUE)
+            sub[, disturbanceRate := 0]
+            return(sub)
           }
           if (nrow(subDR) > 1) {
             warning("Multiple matches in DisturbanceRate for ", 
