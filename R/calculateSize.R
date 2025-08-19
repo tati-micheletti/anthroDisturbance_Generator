@@ -48,15 +48,17 @@ calculateSize <- function(disturbanceParameters,
       }
       
       meanArea <- round(mean(allAreas), 2)
-      SDArea <- ifelse(is.na(round(sd(allAreas), 2)), 0, round(sd(allAreas), 2))
+      sdArea   <- round(stats::sd(allAreas), 2)
       
-      if (meanArea == 0 && SDArea == 0) {
-        epsilon <- 1  # small positive area to prevent zero distribution parameters
-        sub[, disturbanceSize := paste0("rtnorm(1, ", epsilon, ", 0, lower = 0)")]
-        message(crayon::yellow("Zero mean/SD: Assigned epsilon size for numeric stability."))
-      } else {
-        sub[, disturbanceSize := paste0("rtnorm(1, ", meanArea, ", ", SDArea, ", lower = 0)")]
+      # Fallbacks for degenerate/constant inputs
+      if (!is.finite(meanArea) || meanArea <= 0) meanArea <- 1
+      if (is.na(sdArea) || sdArea <= 0) {
+        # pick a tiny but positive sigma (scaled or absolute),
+        # so truncnorm stays numerically stable:
+        sdArea <- max(1, round(0.1 * meanArea, 2))
       }
+      
+      sub[, disturbanceSize := sprintf("rtnorm(1, %g, %g, lower = 0)", meanArea, sdArea)]
     }
     return(sub)
   }))

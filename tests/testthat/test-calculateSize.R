@@ -3,6 +3,7 @@ library(data.table)
 library(terra)
 library(crayon)
 library(sf)
+library(msm)
 
 # Create helper inputs
 r <- rast(nrows=10, ncols=10, xmin=0, xmax=10, ymin=0, ymax=10, vals=1)
@@ -95,19 +96,42 @@ test_that("calculateSize calculates correct values for numeric stability", {
   expect_true(grepl("rtnorm", updatedParams[dataClass == "tinyDisturbance", disturbanceSize]))
 })
 
-test_that("calculateSize calculates zero variance correctly with epsilon", {
-  single_poly <- st_polygon(list(rbind(c(0,0),c(0,1),c(1,1),c(1,0),c(0,0))))
-  disturbanceList$testSector$singlePolyDisturbance <- to_sv(st_sfc(single_poly), "singlePolyDisturbance", "EPSG:3005")
-  disturbanceParameters <- rbind(disturbanceParameters, data.table(
-    dataName="testSector", dataClass="singlePolyDisturbance", disturbanceType="Generating",
-    disturbanceRate=NA_real_, disturbanceSize=NA_real_, disturbanceOrigin="singlePolyDisturbance",
-    disturbanceEnd="", disturbanceInterval=1L, resolutionVector=list(NA)
-  ))
+test_that("calculateSize handles zero-variance inputs with positive sigma", {
+  skip_on_cran()
   
-  updatedParams <- calculateSize(disturbanceParameters,
-                                 disturbanceList,
-                                 whichToUpdate = which(disturbanceParameters$dataClass == "singlePolyDisturbance"))
+  # One single polygon -> sd(area) would be NA/0 without our fallback
+  single_poly <- sf::st_polygon(list(rbind(c(0,0), c(0,1), c(1,1), c(1,0), c(0,0))))
+  sfc <- sf::st_sfc(single_poly, crs = 3005)
+  disturbanceList$testSector$singlePolyDisturbance <- to_sv(sfc, "singlePolyDisturbance", "EPSG:3005")
   
-  expect_true(!is.na(updatedParams[dataClass == "singlePolyDisturbance", disturbanceSize]))
-  expect_true(grepl("rtnorm\\(1, 1, 0, lower = 0\\)", updatedParams[dataClass == "singlePolyDisturbance", disturbanceSize]))
+  disturbanceParameters <- rbind(
+    disturbanceParameters,
+    data.table::data.table(
+      dataName="testSector", dataClass="singlePolyDisturbance", disturbanceType="Generating",
+      disturbanceRate=NA_real_, disturbanceSize=NA_character_, disturbanceOrigin="singlePolyDisturbance",
+      disturbanceEnd="", disturbanceInterval=1L, resolutionVector=list(NA)
+    ),
+    fill = TRUE
+  )
+  
+  idx <- which(disturbanceParameters$dataClass == "singlePolyDisturbance")
+  updatedParams <- calculateSize(disturbanceParameters, disturbanceList, whichToUpdate = idx)
+  
+  s <- updatedParams[dataClass == "singlePolyDisturbance", disturbanceSize]
+  expect_true(!is.na(s))
+  
+  # Expect format: rtnorm(1, <mu>, <sigma>, lower = 0) with sigma > 0
+  m <- regexec("^rtnorm\\(1,\\s*([0-9.]+),\\s*([0-9.]+),\\s*lower\\s*=\\s*0\\)$", s)
+  caps <- regmatches(s, m)[[1]]
+  expect_gt(length(caps), 2)                               # captured mu and sigma
+  mu    <- as.numeric(caps[2])
+  sigma <- as.numeric(caps[3])
+  
+  expect_true(is.finite(mu)    && mu > 0)
+  expect_true(is.finite(sigma) && sigma > 0) 
+  
+  # Also ensure it's parsable/evaluable and non-negative
+  val <- eval(parse(text = s))
+  expect_true(is.numeric(val) && length(val) == 1L && is.finite(val) && val >= 0)
 })
+
