@@ -59,6 +59,8 @@ test_that("only potential layers error early for vector", {
 
 # 6. Core raster output
 test_that("raster output is binary mask at key locations", {
+  r_template <- terra::rast(r_template)               # ensure SpatRaster
+  r_template <- terra::mask(terra::setValues(r_template, 0), studyArea_sv)
   outR <- createBufferedDisturbances(distList, bufferSize=1,
                                      rasterToMatch=r_template,
                                      studyArea=studyArea_sv,

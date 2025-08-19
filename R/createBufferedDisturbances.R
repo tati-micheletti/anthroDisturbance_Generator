@@ -172,7 +172,7 @@ createBufferedDisturbances <- function(disturbanceList,
       }
       
       bufferedAnthropogenicDisturbance500m <- rasterToMatch
-      bufferedAnthropogenicDisturbance500m[] <- 0
+      bufferedAnthropogenicDisturbance500m[!is.na(bufferedAnthropogenicDisturbance500m[])] <- 0
       for (i in seq_along(allBuffered)) {
         if (!is.null(allBuffered[[i]])) {
           bufferedAnthropogenicDisturbance500m[which(allBuffered[[i]][] == 1)] <- 1
