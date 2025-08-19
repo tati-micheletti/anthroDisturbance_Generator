@@ -228,17 +228,21 @@ calculateRate <- function(disturbanceParameters,
                       "; setting rate to zero", immediate. = TRUE)
               sub[, disturbanceRate := 0]
             } else {
-              if (NROW(toUseSub) > 1L)
-                warning("Repeated ECCC rows for ", sub$dataName, "/", sub$dataClass, 
-                        "; using the first")
-              sub[, disturbanceRate := 100 * toUseSub[1, proportionAreaSqKmChangedPerYear]]
+              if (NROW(toUseSub) > 1L) {
+                warning("Repeated ECCC rows for ", sub$dataName, "/", sub$dataClass, "; using first")
+                toUseSub <- toUseSub[1]
+              }
+              # Pull the single value, sanitize it
+              val <- toUseSub[["proportionAreaSqKmChangedPerYear"]]
+              if (length(val) == 0L || is.na(val)) val <- 0
+              # Already clipped negatives to 0 earlier, but be defensive:
+              val <- max(0, val)
+              sub[, disturbanceRate := 100 * val]
+              
+              message(paste0("Using yearly disturbance rate for ", sub[["dataName"]],
+                             " as ", round(sub[["disturbanceRate"]], 6),
+                             "% of the total area."))
             }
-            # Here the disturbance rate is in proportion. Needs to be multiplied for %!
-            sub[, disturbanceRate := 100*toUseSub[["proportionAreaSqKmChangedPerYear"]]]
-            
-            message(paste0("Using yearly disturbance rate for ", sub[["dataName"]],
-                           " as ", round(sub[["disturbanceRate"]], 6), 
-                           "% of the total area."))
           }
         } else {
           # One can also pass the parameter totalDisturbanceRate. If so, we use the ECCC data to calculate

@@ -2,6 +2,7 @@ library(testthat)
 library(terra)
 library(data.table)
 library(digest)
+library(withr)
 
 # Helper: create a minimal SpatVector study area (one 1x1 cell)
 create_study_area <- function() {
@@ -35,11 +36,12 @@ rast_template <- function() {
   rast(nrows=1, ncols=1, xmin=0, xmax=1, ymin=0, ymax=1, crs="EPSG:4326")
 }
 
+
 # 1. Error if both DisturbanceRate and totalDisturbanceRate are provided
 test_that("throws error when both DisturbanceRate and totalDisturbanceRate are non-null", {
   params <- params_template()
   expect_error(
-    calculateRate_new(
+    calculateRate(
       disturbanceParameters           = params,
       disturbanceDT                   = disturbanceDT,
       disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
@@ -65,7 +67,7 @@ test_that("applies user-supplied DisturbanceRate correctly and preserves other f
     disturbanceRate   = 7.5
   )
   
-  result <- calculateRate_new(
+  result <- calculateRate(
     disturbanceParameters           = params,
     disturbanceDT                   = disturbanceDT,
     disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
@@ -100,7 +102,7 @@ test_that("skips updating when the disturbance layer is NULL or empty list", {
     disturbanceRate   = NA_real_
   )
   for (lay in list(NULL, list())) {
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = lay)),
@@ -135,7 +137,7 @@ test_that("negative empirical change yields zero disturbance rate without warnin
   params <- params_template()
   # suppress messages rather than expect_silent, since calculateRate uses message()
   suppressMessages(
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -171,7 +173,7 @@ test_that("positive empirical change yields correct disturbance rate within tole
   params <- params_template()
   # suppress messages
   suppressMessages(
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -214,7 +216,7 @@ test_that("correctly applies totalDisturbanceRate when DisturbanceRate is NULL",
   on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
   
   expect_warning(  
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -250,7 +252,7 @@ test_that("issues warning when diffYears is OLD_2015", {
   
   params <- params_template()
   expect_warning(
-    calculateRate_new(
+    calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -284,7 +286,7 @@ test_that("zero empirical change yields zero disturbance rate", {
   
   params <- params_template()
   suppressMessages(
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -347,7 +349,7 @@ test_that("correctly handles multiple disturbances", {
   assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
   on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
   
-  result <- calculateRate_new(
+  result <- calculateRate(
     disturbanceParameters             = params,
     disturbanceDT                     = disturbanceDT_multi,
     disturbanceList                   = disturbanceList_multi,
@@ -391,7 +393,7 @@ test_that("uses cached file if available", {
   fname <- file.path(tempdir(), paste0("anthropogenicDisturbance_ECCC_2010_2015_", key, ".csv"))
   write.csv(data.table(Class="C1", yearOLD=0, yearNEW=5), fname, row.names=FALSE)
   
-  result <- calculateRate_new(
+  result <- calculateRate(
     disturbanceParameters             = params,
     disturbanceDT                     = disturbanceDT,
     disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -435,7 +437,7 @@ test_that("totalDisturbanceRate distributes rates correctly", {
   params <- params_template()
   
   expect_warning(
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters           = params,
       disturbanceDT                   = disturbanceDT,
       disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
@@ -477,7 +479,7 @@ test_that("disturbance is dropped when missing from proportion table", {
   
   params <- params_template()
   
-  result <- calculateRate_new(
+  result <- suppressWarnings(calculateRate(
     disturbanceParameters           = params,
     disturbanceDT                   = disturbanceDT,
     disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
@@ -497,9 +499,32 @@ test_that("disturbance is dropped when missing from proportion table", {
     archiveOLD                      = NULL,
     targetFileOLD                   = NULL,
     urlOLD                          = NULL
-  )
+  ))
   
-  expect_equal(nrow(result), 0) # Should be dropped
+  key <- params[1, .(dataName, dataClass, disturbanceType, disturbanceOrigin)]
+  updated <- result[key, on=names(key)]
+  expect_equal(updated$disturbanceRate, 0)
+  expect_warning(calculateRate(
+    disturbanceParameters           = params,
+    disturbanceDT                   = disturbanceDT,
+    disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
+    whichToUpdate                   = 1L,
+    RTM                             = rast_template(),
+    studyArea                       = create_study_area(),
+    destinationPath                 = tempdir(),
+    DisturbanceRate                 = NULL,
+    totalDisturbanceRate            = 10,
+    diffYears                       = "2010_2015",
+    disturbanceRateRelatesToBufferedArea = FALSE,
+    maskOutLinesFromPolys           = FALSE,
+    aggregateSameDisturbances       = FALSE,
+    archiveNEW                      = NULL,
+    targetFileNEW                   = NULL,
+    urlNEW                          = NULL,
+    archiveOLD                      = NULL,
+    targetFileOLD                   = NULL,
+    urlOLD                          = NULL
+  ), "No historical ECCC disturbance for these classes → setting rate to zero", ignore.case = TRUE)
 })
 
 # 13.
@@ -540,7 +565,7 @@ test_that("handles multiple whichToUpdate rows", {
   on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
   
   result <- suppressMessages(
-    calculateRate_new(
+    calculateRate(
       disturbanceParameters           = params,
       disturbanceDT                   = disturbanceDT2,
       disturbanceList                 = list(
@@ -584,7 +609,7 @@ test_that("final rate message includes correct total", {
   expected_rate <- ((5-0)/5/totalArea)*100
   
   expect_message(
-    calculateRate_new(
+    calculateRate(
       disturbanceParameters           = params,
       disturbanceDT                   = disturbanceDT,
       disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
@@ -620,7 +645,7 @@ test_that("drops disturbance when layer absent but DisturbanceRate provided", {
     disturbanceRate   = 7.5
   )
   
-  result <- calculateRate_new(
+  result <- calculateRate(
     disturbanceParameters           = params,
     disturbanceList                 = list(dn1 = list(orig1 = NULL)),  # Layer absent
     DisturbanceRate                 = override,
@@ -656,7 +681,7 @@ test_that("errors when DisturbanceRate has no matching row", {
   )
   
   expect_warning(
-    calculateRate_new(
+    calculateRate(
       disturbanceParameters           = params,
       disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
       DisturbanceRate                 = override,
@@ -677,7 +702,7 @@ test_that("errors when DisturbanceRate has no matching row", {
       targetFileOLD                   = NULL,
       urlOLD                          = NULL
     ),
-    "No matching row in DisturbanceRate for dn1/orig1; dropping it"  # Check error message
+    "No matching row in DisturbanceRate for dn1/orig1; setting rate to zero"  # Check error message
   )
 })
 
@@ -693,7 +718,7 @@ test_that("errors cleanly when DisturbanceRate has no matching row", {
   )
   
   expect_warning(
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters = params,
       disturbanceDT = disturbanceDT,
       disturbanceList = list(dn1 = list(orig1 = dummy_layer)),
@@ -716,7 +741,14 @@ test_that("errors cleanly when DisturbanceRate has no matching row", {
     ),
     "No matching row in DisturbanceRate"
   )
-  expect_equal(nrow(result), 0)
+  
+  key <- params[1, .(dataName, dataClass, disturbanceType, disturbanceOrigin)]
+  updated <- result[key, on = names(key)]
+  expect_equal(nrow(updated), 1L)
+  expect_equal(updated$disturbanceRate, 0)
+  
+  # Optional: whole table preserved
+  expect_equal(nrow(result), nrow(params))
 })
 
 # 18. Missing class in ECCC data
@@ -729,7 +761,7 @@ test_that("skips disturbance when class missing in ECCC data", {
   
   params <- params_template()
   
-  result <- calculateRate_new(
+  result <- suppressWarnings(calculateRate(
     disturbanceParameters             = params,
     disturbanceDT                     = disturbanceDT,
     disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -748,9 +780,32 @@ test_that("skips disturbance when class missing in ECCC data", {
     archiveOLD                          = NULL,
     targetFileOLD                       = NULL,
     urlOLD                              = NULL
-  )
+  ))
   
-  expect_equal(nrow(result), 0)
+  key <- params[1, .(dataName, dataClass, disturbanceType, disturbanceOrigin)]
+  updated <- result[key, on=names(key)]
+  expect_equal(updated$disturbanceRate, 0)
+  
+  expect_warning(calculateRate(
+    disturbanceParameters             = params,
+    disturbanceDT                     = disturbanceDT,
+    disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
+    whichToUpdate                     = 1L,
+    RTM                               = rast_template(),
+    studyArea                         = create_study_area(),
+    destinationPath                   = tempdir(),
+    DisturbanceRate                   = NULL,
+    totalDisturbanceRate              = NULL,
+    disturbanceRateRelatesToBufferedArea = FALSE,
+    maskOutLinesFromPolys               = FALSE,
+    aggregateSameDisturbances           = FALSE,
+    archiveNEW                          = NULL,
+    targetFileNEW                       = NULL,
+    urlNEW                              = NULL,
+    archiveOLD                          = NULL,
+    targetFileOLD                       = NULL,
+    urlOLD                              = NULL
+  ), "No historical ECCC disturbance for these classes → setting rate to zero", ignore.case = TRUE)
 })
 
 # 19. Multiple DisturbanceRate matches
@@ -774,7 +829,7 @@ test_that("warns and uses first row when multiple DisturbanceRate matches", {
   )
   
   expect_warning(
-    result <- calculateRate_new(
+    result <- calculateRate(
       disturbanceParameters = params,
       disturbanceDT = disturbanceDT,
       disturbanceList = list(dn1 = list(orig1 = dummy_layer)),
@@ -812,7 +867,7 @@ test_that("buffer, maskOutLinesFromPolys and aggregateSameDisturbances are passe
   
   params <- params_template()
   suppressMessages(
-    calculateRate_new(
+    calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
@@ -843,7 +898,7 @@ test_that("buffer, maskOutLinesFromPolys and aggregateSameDisturbances are passe
 # 21. Test empty whichToUpdate → returns original unmodified
 test_that("no-op when whichToUpdate is empty", {
   params <- params_template()
-  result <- calculateRate_new(
+  result <- calculateRate(
     disturbanceParameters           = params,
     disturbanceDT                   = disturbanceDT,
     disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
@@ -883,7 +938,7 @@ test_that("applies user‐supplied DisturbanceRate for Enlarging classes", {
     disturbanceOrigin = "orig1",
     disturbanceRate   = 9.1
   )
-  result <- calculateRate_new(
+  result <- calculateRate(
     disturbanceParameters           = params,
     disturbanceDT                   = disturbanceDT,
     disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
@@ -907,6 +962,248 @@ test_that("applies user‐supplied DisturbanceRate for Enlarging classes", {
   expect_equal(result$disturbanceRate, 9.1)
 })
 
+test_that("no rows to update returns original table unchanged", {
+  skip_on_cran()
+  
+  # --- Minimal fixtures ---
+  rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
+  sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
+  
+  disturbanceParameters <- data.table(
+    dataName="forestry", dataClass="cutblocks", disturbanceType="Generating",
+    disturbanceOrigin="cutblocks", disturbanceRate=NA_real_
+  )
+  
+  disturbanceDT <- data.table(
+    fieldToSearch="Class", classToSearch="CUTBLOCKS", dataName="forestry", dataClass="cutblocks"
+  )
+  
+  disturbanceList <- list(forestry = list(cutblocks = vect(matrix(c(0,0, 10,0, 10,10, 0,10, 0,0),
+                                                                  ncol=2, byrow=TRUE),
+                                                           type="polygons", crs=crs(rtm))))
+  
+  out <- calculateRate(
+    disturbanceParameters = copy(disturbanceParameters),
+    disturbanceDT = disturbanceDT,
+    disturbanceList = disturbanceList,
+    whichToUpdate = integer(0),
+    RTM = rtm,
+    studyArea = sa,
+    DisturbanceRate = NULL,
+    totalDisturbanceRate = NULL,
+    diffYears = "2010_2015",
+    destinationPath = tempdir(),
+    disturbanceRateRelatesToBufferedArea = FALSE,
+    maskOutLinesFromPolys = FALSE,
+    aggregateSameDisturbances = FALSE,
+    archiveNEW = NULL, targetFileNEW = NULL, urlNEW = NULL,
+    archiveOLD = NULL, targetFileOLD = NULL, urlOLD = NULL
+  )
+  
+  expect_identical(out, disturbanceParameters)
+})
+
+test_that("DisturbanceRate: no matching row -> warning and rate set to 0 (not NA)", {
+  skip_on_cran()
+  
+  rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
+  sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
+  
+  dParams <- data.table(
+    dataName="forestry", dataClass="cutblocks", disturbanceType="Generating",
+    disturbanceOrigin="cutblocks", disturbanceRate=NA_real_
+  )
+  
+  dDT <- data.table(fieldToSearch="Class", classToSearch="CUTBLOCKS",
+                    dataName="forestry", dataClass="cutblocks")
+  
+  # Provide a non-null lay so we reach the DisturbanceRate branch:
+  dl <- list(forestry = list(cutblocks = vect(matrix(c(0,0, 10,0, 10,10, 0,10, 0,0),
+                                                     ncol=2, byrow=TRUE),
+                                              type="polygons", crs="EPSG:3857")))
+  
+  DR <- data.table( # deliberately NOT matching (different class)
+    dataName="forestry", dataClass="roads", disturbanceType="Generating",
+    disturbanceOrigin="roads", disturbanceRate=1.23
+  )
+  
+  expect_warning(
+    out <- calculateRate(dParams, dDT, dl, whichToUpdate = 1L, RTM = rtm, diffYears="2010_2015",
+                         destinationPath=tempdir(), studyArea=sa,
+                         DisturbanceRate = DR, totalDisturbanceRate = NULL,
+                         disturbanceRateRelatesToBufferedArea=FALSE,
+                         maskOutLinesFromPolys=FALSE, aggregateSameDisturbances=FALSE,
+                         archiveNEW=NULL, targetFileNEW=NULL, urlNEW=NULL,
+                         archiveOLD=NULL, targetFileOLD=NULL, urlOLD=NULL),
+    regexp = "No matching row in DisturbanceRate", ignore.case = TRUE
+  )
+  expect_equal(out[1, disturbanceRate], 0)
+})
+
+test_that("DisturbanceRate: multiple matches -> warning and first row is used", {
+  skip_on_cran()
+  
+  rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
+  sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
+  
+  dParams <- data.table(
+    dataName="forestry", dataClass="cutblocks", disturbanceType="Generating",
+    disturbanceOrigin="cutblocks", disturbanceRate=NA_real_
+  )
+  dDT <- data.table(fieldToSearch="Class", classToSearch="CUTBLOCKS",
+                    dataName="forestry", dataClass="cutblocks")
+  
+  dl <- list(forestry = list(cutblocks = vect(matrix(c(0,0, 10,0, 10,10, 0,10, 0,0),
+                                                     ncol=2, byrow=TRUE),
+                                              type="polygons", crs="EPSG:3857")))
+  
+  DR <- data.table(
+    dataName="forestry", dataClass="cutblocks", disturbanceType="Generating",
+    disturbanceOrigin="cutblocks", disturbanceRate=c(0.5, 1.5) # first should win
+  )
+  
+  expect_warning(
+    out <- calculateRate(dParams, dDT, dl, whichToUpdate = 1L, RTM = rtm, diffYears="2010_2015",
+                         destinationPath=tempdir(), studyArea=sa,
+                         DisturbanceRate = DR, totalDisturbanceRate = NULL,
+                         disturbanceRateRelatesToBufferedArea=FALSE,
+                         maskOutLinesFromPolys=FALSE, aggregateSameDisturbances=FALSE,
+                         archiveNEW=NULL, targetFileNEW=NULL, urlNEW=NULL,
+                         archiveOLD=NULL, targetFileOLD=NULL, urlOLD=NULL),
+    regexp = "Multiple matches", ignore.case = TRUE
+  )
+  expect_equal(out[1, disturbanceRate], 0.5)
+})
+
+test_that("ECCC: no rows for requested classes -> warns and sets all targeted rates to 0", {
+  skip_on_cran()
+  
+  # Define stub_data: empty table for all requested classes
+  stub_data <- data.table(
+    Class = character(),
+    yearOLD = numeric(),
+    yearNEW = numeric()
+  )
+  
+  # Save the original function
+  original_fn <- disturbanceInfoFromECCC
+  # Assign the stub
+  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
+  # Ensure the original function is restored after the test
+  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  
+  rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
+  sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
+  
+  dParams <- data.table(
+    dataName=c("forestry","mining"),
+    dataClass=c("cutblocks","mines"),
+    disturbanceType="Generating",
+    disturbanceOrigin=c("cutblocks","mines"),
+    disturbanceRate=NA_real_
+  )
+  dDT <- data.table(
+    fieldToSearch="Class",
+    classToSearch=c("CUTBLOCKS","MINES"),
+    dataName=c("forestry","mining"),
+    dataClass=c("cutblocks","mines")
+  )
+  dl <- list(
+    forestry = list(cutblocks = vect(matrix(c(0,0, 10,0, 10,10, 0,10, 0,0), 2, byrow=TRUE),
+                                     type="polygons", crs="EPSG:3857")),
+    mining   = list(mines     = vect(matrix(c(0,0, 10,0, 10,10, 0,10, 0,0), 2, byrow=TRUE),
+                                     type="polygons", crs="EPSG:3857"))
+  )
+  
+  expect_warning(
+    out <- calculateRate(
+      disturbanceParameters = dParams,
+      disturbanceDT = dDT,
+      disturbanceList = dl,
+      whichToUpdate = 1:2,
+      RTM = rtm,
+      diffYears="2010_2015",
+      destinationPath=tempdir(),
+      studyArea=sa,
+      DisturbanceRate = NULL,
+      totalDisturbanceRate = NULL,
+      disturbanceRateRelatesToBufferedArea=FALSE,
+      maskOutLinesFromPolys=FALSE,
+      aggregateSameDisturbances=FALSE,
+      archiveNEW=NULL, targetFileNEW=NULL, urlNEW=NULL,
+      archiveOLD=NULL, targetFileOLD=NULL, urlOLD=NULL
+    ),
+    regexp = "No historical ECCC disturbance", ignore.case = TRUE
+  )
+  expect_equal(out[dataName=="forestry", disturbanceRate], 0)
+  expect_equal(out[dataName=="mining",   disturbanceRate], 0)
+})
+
+test_that("ECCC: per-class missing row -> WARNING + sets only that row to 0 (document desired fix)", {
+  skip_on_cran()
+  
+  # Define stub_data: only "CUTBLOCKS" present, "MINES" missing
+  stub_data <- data.table(
+    Class = c("CUTBLOCKS"),
+    yearOLD = c(0),
+    yearNEW = c(0)
+  )
+  
+  # Save the original function
+  original_fn <- disturbanceInfoFromECCC
+  # Assign the stub
+  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
+  # Ensure the original function is restored after the test
+  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  
+  rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
+  sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
+  
+  dParams <- data.table(
+    dataName=c("forestry","mining"),
+    dataClass=c("cutblocks","mines"),
+    disturbanceType="Generating",
+    disturbanceOrigin=c("cutblocks","mines"),
+    disturbanceRate=NA_real_
+  )
+  dDT <- data.table(
+    fieldToSearch="Class",
+    classToSearch=c("CUTBLOCKS","MINES"),
+    dataName=c("forestry","mining"),
+    dataClass=c("cutblocks","mines")
+  )
+  dl <- list(
+    forestry = list(cutblocks = vect(matrix(c(0,0, 10,0, 10,10, 0,10, 0,0), 2, byrow=TRUE),
+                                     type="polygons", crs="EPSG:3857")),
+    mining   = list(mines     = vect(matrix(c(0,0, 10,0, 10,10, 0,10, 0,0), 2, byrow=TRUE),
+                                     type="polygons", crs="EPSG:3857"))
+  )
+  
+  expect_warning(
+    out <- calculateRate(
+      disturbanceParameters = dParams,
+      disturbanceDT = dDT,
+      disturbanceList = dl,
+      whichToUpdate = 1:2,
+      RTM = rtm,
+      diffYears="2010_2015",
+      destinationPath=tempdir(),
+      studyArea=sa,
+      DisturbanceRate = NULL,
+      totalDisturbanceRate = NULL,
+      disturbanceRateRelatesToBufferedArea=FALSE,
+      maskOutLinesFromPolys=FALSE,
+      aggregateSameDisturbances=FALSE,
+      archiveNEW=NULL, targetFileNEW=NULL, urlNEW=NULL,
+      archiveOLD=NULL, targetFileOLD=NULL, urlOLD=NULL
+    ),
+    regexp = "No ECCC-derived rate|Using yearly disturbance rate|Repeated data", ignore.case = TRUE
+  )
+  expect_true(out[dataName=="forestry", disturbanceRate] >= 0)
+  expect_equal(out[dataName=="mining",  disturbanceRate], 0)
+})
+
+
 # -------------------------------------------------------------------
 # 23. Test that real‐fetch flags get to prepInputs (integration stub)
 #test_that("passes fetch flags through to disturbanceInfoFromECCC", {
@@ -919,7 +1216,7 @@ test_that("applies user‐supplied DisturbanceRate for Enlarging classes", {
 #  }, envir = .GlobalEnv)
 #  on.exit(assign("disturbanceInfoFromECCC", originalECCC, envir = .GlobalEnv), add = TRUE)
 #  
-#  calculateRate_new(
+#  calculateRate(
 #    disturbanceParameters           = params_template(),
 #    disturbanceDT                   = disturbanceDT,
 #    disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
