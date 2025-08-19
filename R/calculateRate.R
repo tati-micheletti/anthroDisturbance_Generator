@@ -173,8 +173,30 @@ calculateRate <- function(disturbanceParameters,
             prop_file <- file.path(destinationPath, 
                                    paste0("proportionTable_ECCC_", diffYears, "_", 
                                           digest(studyArea),".csv"))
-            if (!file.exists(prop_file)){
-              proportionTable <- distECCC[["proportionTable"]] 
+            if (!file.exists(prop_file)) {
+              if (!exists("distECCC")) {
+                distECCC <- disturbanceInfoFromECCC(
+                  studyArea                     = studyArea, 
+                  RTM                           = RTM,
+                  disturbanceList               = disturbanceList,
+                  totalstudyAreaVAreaSqKm       = totalstudyAreaVAreaSqKm,
+                  classesAvailable              = classesAvailable,
+                  destinationPath               = destinationPath,
+                  bufferedDisturbances          = disturbanceRateRelatesToBufferedArea,
+                  maskOutLinesFromPolys         = maskOutLinesFromPolys,
+                  aggregateSameDisturbances     = aggregateSameDisturbances,
+                  #overwriteDisturbanceLayersNEW = overwriteDisturbanceLayersNEW,
+                  #overwriteDisturbanceLayersOLD = overwriteDisturbanceLayersOLD,
+                  archiveNEW                    = archiveNEW,
+                  diffYears                     = diffYears,
+                  targetFileNEW                 = targetFileNEW,
+                  urlNEW                        = urlNEW,
+                  archiveOLD                    = archiveOLD,
+                  targetFileOLD                 = targetFileOLD,
+                  urlOLD                        = urlOLD
+                )
+              }
+              proportionTable <- distECCC[["proportionTable"]]
             } else {
               proportionTable <- data.table::fread(prop_file)
             }
