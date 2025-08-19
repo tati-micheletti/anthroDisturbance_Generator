@@ -223,3 +223,143 @@ test_that("unsupported class combination throws a clear error for a non-Enlargin
     "currDist for 'pipelines::roads.foo' is invalid class: character"
   )
 })
+
+test_that("multi-layer updates with mixed types in pipelines sector", {
+  # prepare new pipelines and roads updates
+  new_pipe <- vect(st_sfc(st_point(c(2,2))))
+  crs(new_pipe) <- crs(r)
+  new_roads <- vect(st_sfc(st_linestring(rbind(c(1,5), c(2,5)))))
+  crs(new_roads) <- crs(r)
+  
+  upd2 <- updAll
+  upd2$individuaLayers$pipelines <- list(
+    pipelines = new_pipe,
+    roads     = new_roads
+  )
+  
+  distParam2 <- copy(distParam)
+  # make roads Enlarging (replace) and leave pipelines Generating (merge)
+  distParam2[
+    dataName == "pipelines" & disturbanceOrigin == "roads",
+    `:=`(disturbanceType = "Enlarging", disturbanceEnd = "")
+  ]
+  
+  out2 <- replaceListFast(distList, upd2, currentTime = 42, disturbanceParameters = distParam2)
+  
+  # both updated layers should appear
+  expect_true(all(c("pipelines", "roads") %in% names(out2$pipelines)))
+  
+  # pipelines (Generating) merges: empty past + new = 1 feature
+  expect_s4_class(out2$pipelines$pipelines, "SpatVector")
+  expect_equal(nrow(out2$pipelines$pipelines), 1)
+  
+  # roads (Enlarging & disturbanceEnd == "") replaces: only new feature
+  expect_s4_class(out2$pipelines$roads, "SpatVector")
+  expect_equal(nrow(out2$pipelines$roads), 1)
+})
+
+
+test_that("Enlarging with disturbanceEnd != '' merges rather than replaces for settlements", {
+  new_set <- vect(st_sfc(st_polygon(list(rbind(
+    c(2,2), c(2,4), c(4,4), c(4,2), c(2,2)
+  )))))
+  crs(new_set) <- crs(r)
+  
+  upd2 <- updAll
+  upd2$individuaLayers$settlements <- list(settlements = new_set)
+  
+  distParam2 <- copy(distParam)
+  # make settlements Enlarging but with non-empty end -> merge
+  distParam2[
+    dataName == "settlements" & disturbanceOrigin == "settlements",
+    `:=`(disturbanceType = "Enlarging", disturbanceEnd = "settlements")
+  ]
+  
+  out2 <- replaceListFast(distList, upd2, currentTime = 42, disturbanceParameters = distParam2)
+  merged <- out2$settlements$settlements
+  
+  expect_s4_class(merged, "SpatVector")
+  # should combine past + current => 2 features
+  expect_equal(nrow(merged), 2)
+})
+
+
+test_that("NULL pastDist with non-null currDist returns currDist for forestry", {
+  distList2 <- distList
+  distList2$forestry$cutblocks <- NULL
+  
+  new_fb <- vect(st_sfc(st_polygon(list(rbind(
+    c(8,4), c(8,6), c(9,6), c(9,4), c(8,4)
+  )))))
+  crs(new_fb) <- crs(r)
+  
+  upd2 <- updAll
+  upd2$individuaLayers$forestry <- list(cutblocks = new_fb)
+  
+  out2 <- replaceListFast(distList2, upd2, currentTime = 42, disturbanceParameters = distParam)
+  result <- out2$forestry$cutblocks
+  
+  expect_s4_class(result, "SpatVector")
+  expect_true("Class" %in% names(result))
+  expect_equal(nrow(result), 1)
+})
+
+test_that("when pastDist is NULL and currDist is a raster, returns raster and no 'Class'", {
+  skip_on_cran()
+
+  r <- rast(nrows = 2, ncols = 2, xmin = 0, xmax = 10, ymin = 0, ymax = 10, crs = "EPSG:3857")
+  values(r) <- 1
+  
+  # No past disturbance; only a new raster layer for 'mining::mining'
+  disturbanceList <- list(mining = list(mining = NULL))
+  updatedLayersAll <- list(individuaLayers = list(mining = list(mining = r)))
+  disturbanceParameters <- data.table(
+    dataName = "mining", disturbanceOrigin = "mining",
+    disturbanceEnd = "", disturbanceType = "Generating"
+  )
+  
+  out <- replaceListFast(
+    disturbanceList = disturbanceList,
+    updatedLayersAll = updatedLayersAll,
+    currentTime = 2015L,
+    disturbanceParameters = disturbanceParameters
+  )
+  
+  expect_true(inherits(out$mining[["mining"]], "SpatRaster"))
+  expect_false("Class" %in% names(out$mining[["mining"]]))  # no attempt to add an attribute to a raster
+})
+
+
+test_that("merged vector overwrites a numeric 'Class' with the layer name as character", {
+  skip_on_cran()
+
+  crs_str <- "EPSG:3857"
+  # past vector (with numeric Class)
+  past <- vect(matrix(c(0,0, 4,0, 4,4, 0,4, 0,0), ncol = 2, byrow = TRUE), type = "polygons", crs = crs_str)
+  past$Class <- 1L  # numeric -> this caused NA when assigning a character later
+  
+  # current vector (no Class)
+  curr <- vect(matrix(c(6,0, 10,0, 10,4, 6,4, 6,0), ncol = 2, byrow = TRUE), type = "polygons", crs = crs_str)
+  
+  disturbanceList   <- list(mining = list(mining = past))
+  updatedLayersAll  <- list(individuaLayers = list(mining = list(mining = curr)))
+  disturbanceParameters <- data.table(
+    dataName = "mining", disturbanceOrigin = "mining",
+    disturbanceEnd = "", disturbanceType = "Generating"
+  )
+  
+  out <- replaceListFast(
+    disturbanceList = disturbanceList,
+    updatedLayersAll = updatedLayersAll,
+    currentTime = 2015L,
+    disturbanceParameters = disturbanceParameters
+  )
+  
+  merged <- out$mining[["mining"]]
+  
+  expect_s4_class(merged, "SpatVector")
+  expect_true("Class" %in% names(merged))
+  expect_true(is.character(merged$Class))
+  expect_true(all(merged$Class == "mining"))
+})
+

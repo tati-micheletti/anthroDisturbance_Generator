@@ -148,8 +148,17 @@ replaceListFast <- function(disturbanceList,
             tictoc::toc()
           }
         }
-        if (!is.null(unified)) {
-          unified[["Class"]] <- rep(layName, nrow(unified))
+        if (!is.null(unified) && inherits(unified, "SpatVector")) {
+          # ensure we can write characters
+          if ("Class" %in% names(unified) && !is.character(tryCatch(unified$Class, error = function(...) NA))) {
+            # drop then recreate as character
+            unified <- unified[, setdiff(names(unified), "Class")]
+          }
+          if (!"Class" %in% names(unified)) {
+            unified[["Class"]] <- layName
+          } else {
+            unified[["Class"]] <- rep(layName, nrow(unified))
+          }
         }
         return(unified)
       })
