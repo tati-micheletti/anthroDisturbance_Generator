@@ -61,16 +61,25 @@ simulateLines <- function(Lines, distThreshold = 5000,
           }
         }
       }
-      SD <- sd(lengths(exSet))
       n_parallel_pairs <- parallel_count
       n_perpendicular_pairs <- perpendicular_count
-      lineLengths <- truncnorm::rtruncnorm(nLines,
-                                           a = min(lengths(exSet)),
-                                           b = max(lengths(exSet)),
-                                           mean = mean(lengths(exSet)),
-                                           sd = if (!is.na(SD)) SD else 0)
+      L_ex <- terra::perim(exSet)
+      a    <- min(L_ex); b <- max(L_ex); mu <- mean(L_ex)
+      SD   <- stats::sd(L_ex)
+      
+      if (!is.finite(a) || !is.finite(b) || !is.finite(mu) || a >= b || !is.finite(SD) || SD <= 0) {
+        # Degenerate: all same length (or otherwise ill-posed) → use deterministic lengths
+        lineLengths <- rep(mu, nLines)
+      } else {
+        # Healthy case: sample, but still guard against rare NA returns
+        eps <- max(1e-6, 0.01 * mu)
+        SD  <- max(SD, eps)
+        lineLengths <- truncnorm::rtruncnorm(nLines, a = a, b = b, mean = mu, sd = SD)
+        nas <- is.na(lineLengths) | !is.finite(lineLengths)
+        if (any(nas)) lineLengths[nas] <- mu
+      }
     } else {
-      lineLengths <- lengths(exSet)
+      lineLengths <- terra::perim(exSet)[1]
       if (length(lineLengths) > 1) stop("Something went wrong. Please debug.")
     }
     # Initialize with random lines for all
@@ -120,8 +129,9 @@ simulateLines <- function(Lines, distThreshold = 5000,
           buffLine <- terra::buffer(simulatedLines[[2*k-1]], width = buff_width)
           boundary_pts <- as.points(buffLine)
           if (nrow(boundary_pts) > 0) {
-            pt <- boundary_pts[sample(nrow(boundary_pts)), 1]
-            pt_coords <- crds(pt)
+            pt_row <- sample.int(nrow(boundary_pts), 1L)
+            pt     <- boundary_pts[pt_row]
+            pt_coords <- terra::crds(pt)
             simulatedLines[[2*k]] <- generateLine(
               angle + runif(1, -tolerance, tolerance),
               lineLengths[2*k],
@@ -148,32 +158,44 @@ simulateLines <- function(Lines, distThreshold = 5000,
           buffLine <- terra::buffer(simulatedLines[[idx]], width = buff_width)
           boundary_pts <- as.points(buffLine)
           if (nrow(boundary_pts) > 0) {
-            pt <- boundary_pts[sample(nrow(boundary_pts)), 1]
-            pt_coords <- crds(pt)
-            simulatedLines[[idx+1]] <- generateLine(
-              angle + 90 + runif(1, -tolerance, tolerance),
-              lineLengths[idx+1],
-              xlim = c(pt_coords[1], pt_coords[1]),
-              ylim = c(pt_coords[2], pt_coords[2]),
-              mCrs = exSet
-            )
+            if (idx + 1 > nLines) break
+            
+            angle <- runif(1, 0, 180)
+            simulatedLines[[idx]] <- generateLine(angle, lineLengths[idx], xlim, ylim, exSet)
+            
+            buff_width  <- if (k <= length(spacing)) max(1, abs(spacing[k])) else buffDist/2
+            buffLine    <- terra::buffer(simulatedLines[[idx]], width = buff_width)
+            boundary_pts <- as.points(buffLine)
+            
+            if (nrow(boundary_pts) > 0) {
+              pt_row   <- sample.int(nrow(boundary_pts), 1L)
+              pt_coords <- terra::crds(boundary_pts[pt_row])
+              simulatedLines[[idx+1]] <- generateLine(
+                angle + 90 + runif(1, -tolerance, tolerance),
+                lineLengths[idx+1],
+                xlim = c(pt_coords[1], pt_coords[1]),
+                ylim = c(pt_coords[2], pt_coords[2]),
+                mCrs = exSet
+              )
+            }
           }
         }
       }
     }
     
     # Safely combine lines and handle degenerates
-    validLines <- simulatedLines[!sapply(simulatedLines, is.null)]
-    sLines <- do.call(rbind, simulatedLines[!sapply(simulatedLines, is.null)])
+    valid <- simulatedLines[!vapply(simulatedLines, is.null, logical(1))]
+    if (length(valid) == 0L) next
+    sLines <- do.call(rbind, valid)
     if (nrow(sLines) > 0) {
       sLines$Pot_Clus <- potclus
-      sLines$lineLength <- lengths(sLines)
+      sLines$lineLength <- terra::perim(sLines)
       sLines$angles <- sapply(1:nrow(sLines), function(i) calculateLineAngle(sLines[i, ]))
       createdLines <- rbind(createdLines, sLines)
     }
   }
   
-  createdLines$calculatedLength <- lengths(createdLines)
+  createdLines$calculatedLength <- terra::perim(createdLines)
   createdLines$Potential      <- sub("_.*", "", createdLines$Pot_Clus)
   return(createdLines)
 }

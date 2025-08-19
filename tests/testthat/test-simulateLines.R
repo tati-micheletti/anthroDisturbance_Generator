@@ -39,7 +39,8 @@ test_that("single-line cluster preserves length", {
   wkt <- "LINESTRING (0 0, 0 2)"
   single <- make_lines(wkt, 42)
   out <- simulateLines(single, distThreshold = 5, distNewLinesFact = 1, refinedStructure = FALSE)
-  expect_equal(out$lineLength, lengths(single), tolerance = 1e-6)
+  
+  expect_equal(out$lineLength, terra::perim(single), tolerance = 1e-6)
 })
 
 # Test that randomized structure (refinedStructure=FALSE) draws lengths within bounds
@@ -54,9 +55,11 @@ test_that("random structure samples lengths within original range", {
   out <- simulateLines(lines, distThreshold = 20, distNewLinesFact = 2, refinedStructure = FALSE)
   
   sims <- out$lineLength
-  eps <- 1e-6
-  expect_true(all(sims >= min(lengths(lines)) - eps))
-  expect_true(all(sims <= max(lengths(lines)) + eps))
+  eps  <- 1e-6
+  L    <- terra::perim(lines)
+  
+  expect_true(all(sims >= min(L) - eps))
+  expect_true(all(sims <= max(L) + eps))
 })
 
 # Test refinedStructure generates perpendicular pairs for a 2-line perpendicular cluster
@@ -121,9 +124,10 @@ test_that("simulateLines silent with projected CRS", {
 test_that("constant-length clusters yield identical simulated lengths", {
   wkt <- rep("LINESTRING (0 0, 10 0)", 4)
   lines <- do.call(rbind, lapply(seq_along(wkt), function(i) make_lines(wkt[i], 1)))
-  orig_len <- lengths(lines)[1]
+  orig_len <- terra::perim(lines)[1]
   set.seed(42)
   out <- simulateLines(lines, distThreshold = 10, distNewLinesFact = 1, refinedStructure = FALSE)
+  
   expect_equal(out$calculatedLength, rep(orig_len, 4), tolerance = 1e-6)
 })
 
