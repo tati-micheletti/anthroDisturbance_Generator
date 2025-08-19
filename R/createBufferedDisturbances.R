@@ -95,7 +95,7 @@ createBufferedDisturbances <- function(disturbanceList,
         }
         lay[lay != 1] <- NA
         lay <- as.polygons(lay, values=TRUE, na.rm=TRUE, digits=5)
-        if (length(lay) > 0) {
+        if (nrow(lay) > 0) {
           lay <- terra::subset(x = lay, subset = lay[[names(lay)]] == 1)
         }
       }
@@ -106,7 +106,7 @@ createBufferedDisturbances <- function(disturbanceList,
       } else if (bufferSize == 0) {
         bLay <- lay
       } else {
-        if (length(lay) > 0) {
+        if (nrow(lay) > 0) {
           bLay <- tryCatch({
             terra::buffer(lay, width = bufferSize)
           }, warning = function(w) {
@@ -121,7 +121,7 @@ createBufferedDisturbances <- function(disturbanceList,
         }
       }
       
-      if (length(bLay) > 0) {
+      if (nrow(bLay) > 0) {
         bLay <- terra::aggregate(bLay, dissolve = TRUE)
         totalAreaKm2 <- terra::expanse(bLay, transform = FALSE, unit = "km")
         message(crayon::green(paste0("Total area disturbed for ", INDEX, " as vector: ",
@@ -139,7 +139,8 @@ createBufferedDisturbances <- function(disturbanceList,
           })
           if (!is.null(bLayRas)) names(bLayRas) <- INDEX
           distTb <- table(bLayRas[])
-          totDistKm <- ifelse("1" %in% names(distTb), distTb["1"] * 0.0625, 0)
+          pxKm2 <- prod(terra::res(rasterToMatch)) / 1e6
+          totDistKm <- ifelse("1" %in% names(distTb), as.numeric(distTb["1"]) * pxKm2, 0)
           message(crayon::green(paste0("Total area disturbed for ", INDEX,
                                        " as raster: ", totDistKm, " km2")))
         } else {
@@ -152,7 +153,7 @@ createBufferedDisturbances <- function(disturbanceList,
       if (convertToRaster) {
         return(bLayRas)
       } else {
-        if (exists("bLay") && length(bLay) > 0) {
+        if (exists("bLay") && nrow(bLay) > 0) {
           return(bLay)
         } else {
           return(NULL)
@@ -182,7 +183,8 @@ createBufferedDisturbances <- function(disturbanceList,
         bufferedAnthropogenicDisturbance500m <- terra::rast(bufferedAnthropogenicDisturbance500m)
       }
       distTable <- table(bufferedAnthropogenicDisturbance500m[], useNA = "no")
-      totDistKm <- ifelse("1" %in% names(distTable), distTable["1"]*0.0625, 0)
+      pxKm2 <- prod(terra::res(rasterToMatch)) / 1e6
+      totDistKm <- ifelse("1" %in% names(distTable), distTable["1"]*pxKm2, 0)
       percDist <- ifelse("0" %in% names(distTable) && "1" %in% names(distTable),
                          round(100*(distTable["1"]/(distTable["0"]+distTable["1"])), 2), 0)
       totalArea <- ifelse("0" %in% names(distTable) && "1" %in% names(distTable),
