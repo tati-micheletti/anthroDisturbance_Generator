@@ -889,12 +889,12 @@ generateDisturbances <- function(disturbanceParameters,
   #############################################
 
   # Put all updated layers in a list to return
-  individuaLayers <- c(Enlarged, Generated, Connected)
+  individualLayers <- c(Enlarged, Generated, Connected)
   
   # Now merge all disturbances (raster format) to avoid creating new disturbances where it has 
   # already been disturbed
 
-  currentDisturbance <- copy(individuaLayers)
+  currentDisturbance <- copy(individualLayers)
   # DEPRECATING BELOW: Instead of converting all to raster, convert ras to polys and keep all as vects
   # curDistRas <- lapply(1:length(currentDisturbance), function(index1){
   #   SECTOR <- names(currentDisturbance)[index1]
@@ -1096,6 +1096,6 @@ generateDisturbances <- function(disturbanceParameters,
   
   ### RETURN!
   
-  list(individuaLayers = individuaLayers, 
+  list(individualLayers = individualLayers, 
        currentDisturbanceLayer = curDistRas)
 }

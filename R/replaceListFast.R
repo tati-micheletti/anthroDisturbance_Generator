@@ -3,7 +3,7 @@ replaceListFast <- function(disturbanceList,
                             currentTime,
                             disturbanceParameters) {
   
-  updatedLayers <- updatedLayersAll$individuaLayers
+  updatedLayers <- updatedLayersAll$individualLayers
   correctMatching <- match(names(updatedLayers), names(disturbanceList))
   cleanedNames <- names(disturbanceList)[unique(sort(correctMatching))]
   externalLays <- lapply(unique(sort(correctMatching)), function(INDEX) {
