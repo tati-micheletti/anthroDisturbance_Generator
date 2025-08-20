@@ -42,7 +42,10 @@ wrapTerraList <- function(terraList, generalPath, zipFiles = FALSE, uploadZip = 
 
 unwrapTerraList <- function(terraList, generalPath){
   
-  if (is.list(terraList) && length(terraList)==0) return(list())
+  if (is.list(terraList) && length(terraList) == 0) {
+    warning("No items to unwrap. Returning empty list.")
+    return(list())
+  }
   
   updatePath <- FALSE
   if (all(!is.list(terraList),

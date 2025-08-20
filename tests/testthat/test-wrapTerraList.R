@@ -210,7 +210,9 @@ test_that("wrapTerraList errors on non-list input", {
 test_that("unwrapTerraList on empty list returns empty list", {
   tmp <- tempfile(); dir.create(tmp)
   on.exit(unlink(tmp, recursive=TRUE), add=TRUE)
-  res <- unwrapTerraList(list(), generalPath = tmp)
+  res <- suppressWarnings(unwrapTerraList(list(), generalPath = tmp))
   expect_equal(res, list())
+  expect_warning(unwrapTerraList(list(), generalPath = tmp)
+                 , "No items to unwrap. Returning empty list.")
 })
 
