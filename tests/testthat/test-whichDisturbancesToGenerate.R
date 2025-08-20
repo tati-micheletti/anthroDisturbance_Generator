@@ -66,7 +66,9 @@ test_that("handles intervals larger than the simulation span", {
 # Non-positive or NA intervals
 test_that("returns empty for non-positive or NA intervals", {
   params <- data.frame(disturbanceInterval = c(0, -1, NA))
-  idx <- whichDisturbancesToGenerate(0, 10, 5, params)
+  idx <- suppressWarnings(whichDisturbancesToGenerate(0, 10, 5, params))
+  expect_warning(whichDisturbancesToGenerate(0, 10, 5, params),
+                 "Skipping 3 row\\(s\\) with non-positive or non-numeric disturbanceInterval: 1, 2, 3")
   expect_equal(idx, integer(0))
 })
 
