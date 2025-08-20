@@ -43,24 +43,44 @@ clusterLines <- function(Lines, distThreshold = 5000,
   totalLineClusters <- length(unique(Lines$cluster))
   
   if (runInParallel) {
-    totalLineClusters <- length(unique(Lines$cluster))
     n_cores <- parallel::detectCores()
     cluster <- parallel::makeCluster(max(1, min(n_cores - 1, totalLineClusters)), type = "PSOCK")
-    parallel::clusterEvalQ(cluster, library(terra))
-    parallel::clusterExport(cluster,
-                            varlist = c("Lines", "calculateLineAngle", "totalLineClusters", "currPotential", "totPotential"),
-                            envir = globalenv())
     doParallel::registerDoParallel(cluster)
     on.exit(parallel::stopCluster(cluster), add = TRUE)
     
-    chunks <- foreach(i = unique(Lines$cluster), .packages = "terra") %dopar% {
-      sub <- Lines[Lines$cluster == i, ]
-      sub$Pot_Clus <- paste0(unique(sub$Potential), "_", i)
-      sub$calculatedLength <- perim(sub)
-      sub$angles <- vapply(seq_len(nrow(sub)), function(j) calculateLineAngle(sub[j, ]), numeric(1))
-      sub
+    # stable ordering key to match sequential output
+    Lines$.__rowid__ <- seq_len(nrow(Lines))
+    
+    # Extract plain R vectors so workers don't touch terra objects
+    clu <- as.integer(Lines$cluster)
+    pot <- as.character(Lines$Potential)
+    rid <- Lines$.__rowid__
+    uniq_clu <- sort(unique(clu))
+    
+    # compute Pot_Clus assignments per cluster using only base vectors
+    assignments <- foreach::foreach(
+      i = uniq_clu,
+      .combine = "rbind",
+      .noexport = c("Lines")  # make sure Lines isn't serialized
+    ) %dopar% {
+      idx <- rid[clu == i]
+      # assuming each cluster has a single Potential value
+      pc  <- paste0(unique(pot[clu == i]), "_", i)
+      data.frame(rowid = idx, Pot_Clus = pc, stringsAsFactors = FALSE)
     }
-    Lines <- do.call(rbind, chunks)
+    
+    # apply Pot_Clus back on the main process
+    Lines$Pot_Clus <- NA_character_
+    Lines$Pot_Clus[match(assignments$rowid, Lines$.__rowid__)] <- assignments$Pot_Clus
+    
+    # compute terra-dependent pieces sequentially (safe & vectorized where possible)
+    Lines$calculatedLength <- perim(Lines)
+    Lines$angles <- vapply(seq_len(nrow(Lines)), function(j) calculateLineAngle(Lines[j, ]), numeric(1))
+    
+    # restore original row order, drop helper
+    o <- order(Lines$.__rowid__)
+    Lines <- Lines[o, ]
+    Lines$.__rowid__ <- NULL
   } else {
     for (i in unique(Lines$cluster)) {
       currPerc <- round(100 * (i / totalLineClusters), 2)
