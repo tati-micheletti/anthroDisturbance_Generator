@@ -1,4 +1,7 @@
 wrapTerraList <- function(terraList, generalPath, zipFiles = FALSE, uploadZip = NULL){
+  Require("stringi")
+  Require("qs")
+  Require("zip")
   
   if (!is.list(terraList)) stop("terraList must be a list")
   if (length(terraList)==0) return(list())
