@@ -10,6 +10,7 @@ cleanupList <- function(aList,
   if (inner) {
     tempList <- lapply(tempList, function(innerList) {
       if (is.null(innerList)) return(NULL)
+      if (!is.list(innerList)) return(innerList)
       Filter(Negate(is.null), innerList)
     })
   }
