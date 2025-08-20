@@ -2,113 +2,102 @@ createCropLayFinalYear1 <- function(Lay,
                                     potLayTopValid, 
                                     runClusteringInParallel, 
                                     clusterDistance, 
-                                    studyAreaHash){
-  
-  # 0. Input validation
+                                    studyAreaHash) {
+  # 0) input validation
   if (!is.numeric(clusterDistance) || length(clusterDistance) != 1) {
     stop("`clusterDistance` must be a single numeric value")
   }
   if (clusterDistance < 0) {
-    stop("`clusterDistance` must be non‐negative")
+    stop("`clusterDistance` must be non-negative")
   }
   
-  # 1. Crop and mask the seismicLines layer to the actual most probable area (potLayTopValid)
+  # 1) crop/reproject Lay to potLayTopValid
   cropLay <- Cache(postProcessTo, Lay, potLayTopValid)
   
-  # if no lines fall inside the potential mask, return an empty SpatVector with a warning
+  # If nothing inside the mask, return consistent list (old callers now expect list)
   if (nrow(cropLay) == 0L) {
-    warning("createCropLayFinalYear1: no input lines fall within potLayTopValid — returning empty SpatVector")
-    return(Lay[0, ])
+    warning("createCropLayFinalYear1: no input lines fall within potLayTopValid — returning empty lines + original availableArea")
+    return(list(
+      lines         = Lay[0, ],            # empty SpatVector(lines), preserves schema/CRS
+      availableArea = potLayTopValid       # unchanged
+    ))
   }
   
-  # guard against two $potential columns from `cropLay <- Cache(postProcessTo, Lay, potLayTopValid)` 
+  # 2) CRITICAL — replicate old semantics: split lines at potential boundaries and
+  #    attach polygon Potential. Using polygon as FIRST arg ensures its attributes
+  #    keep their original names (no suffix) while any duplicates from lines get suffixes (.1)
+  cropLay <- Cache(terra::intersect, potLayTopValid, cropLay)
   
-  # find any columns whose names start with "Potential"
+  # 2a) keep exactly ONE Potential column — the polygon's
   potCols <- grep("^Potential", names(cropLay), value = TRUE)
   if (length(potCols) == 0) {
-    stop("No 'Potential' column found after cropping—cannot cluster.")
+    stop("createCropLayFinalYear1: no 'Potential' column after intersect — check inputs")
   }
-  if (length(potCols) > 1) {
-  # pick the second (terra suffix .1) one, rename it back to “Potential”, drop the other
-    chosen <- potCols[2]
-    names(cropLay)[names(cropLay) == chosen] <- "Potential"
-    dropCols <- setdiff(potCols, chosen)
-    cropLay <- cropLay[, setdiff(names(cropLay), dropCols)]
-  }
-
-  if (!"Potential" %in% names(cropLay) || nrow(cropLay) == 0) {
-    warning("createCropLayFinalYear1(): no valid Potential values → returning empty SpatVector")
+  # keep the bare "Potential" if present; otherwise keep the first and rename it
+  keepPot <- if ("Potential" %in% potCols) "Potential" else potCols[1]
+  if (!identical(keepPot, "Potential")) names(cropLay)[names(cropLay) == keepPot] <- "Potential"
+  dropCols <- setdiff(potCols, "Potential")
+  if (length(dropCols)) cropLay <- cropLay[, setdiff(names(cropLay), dropCols)]
+  
+  # Guard again in case everything got filtered out
+  if (nrow(cropLay) == 0L) {
+    warning("createCropLayFinalYear1: no line segments remain after intersect — returning empty lines + original availableArea")
     return(list(lines = Lay[0, ], availableArea = potLayTopValid))
   }
   
-  
-  # 2. Convert all lines to polygons to exclude them from selecting the random point
-  cropLayBuf <- Cache(buffer, cropLay, width = 50)
-  cropLayAg <- Cache(aggregate, cropLayBuf, dissolve = TRUE)
+  # 3) exclude existing lines from available potential area (50 m buffer as before)
+  cropLayBuf <- Cache(buffer,    cropLay, width = 50)
+  cropLayAg  <- Cache(aggregate, cropLayBuf, dissolve = TRUE)
   finalPotLay <- Cache(erase, potLayTopValid, cropLayAg)
-  potLayTopValid <- finalPotLay
   
-  # 3. Assign unique ID
+  # 4) unique IDs (used later by clustering/simulation)
   cropLay$individualID <- seq_len(nrow(cropLay))
   
-  # 4. Calculate the total length of lines in the "chosen area", their mean and sd
-  # Remove overlapping
+  # 5) overlap removal (keep your improved NA-angle guard)
   tic("Time elapsed to identify overlapping features: ")
   overlap_matrix <- terra::relate(x = cropLay, relation = "T********", pairs = TRUE)
-  overlapMatrix <- as.data.table(overlap_matrix)
-  overlapMatrix[, self := fifelse(id.1 == id.2, TRUE, FALSE)] # Exclude "self-overlapping"
-  overlapMatrix <- overlapMatrix[self == FALSE,]
-  overlapMatrix[, self := NULL]
-  
-  # Ensure id.1 is always the smaller and id.2 is the larger
-  overlapMatrix <- overlapMatrix[, .(id.1 = pmin(id.1, id.2), id.2 = pmax(id.1, id.2))] 
-  overlapMatrix <- unique(overlapMatrix) # Remove duplicates
-  
+  overlapMatrix  <- data.table::as.data.table(overlap_matrix)
+  overlapMatrix[, self := data.table::fifelse(id.1 == id.2, TRUE, FALSE)]
+  overlapMatrix  <- overlapMatrix[self == FALSE][, self := NULL]
+  # normalize (id.1 < id.2) and unique
+  overlapMatrix  <- unique(overlapMatrix[, .(id.1 = pmin(id.1, id.2),
+                                             id.2 = pmax(id.1, id.2))])
   to_remove <- integer()
   for (i in seq_len(nrow(overlapMatrix))) {
-    if (i %in% c(1, 1000)) message(paste0("Feature ", i, " of ", nrow(overlapMatrix)))
-    if (i %% 10000 == 0) message(paste0("Feature ", i, " of ", nrow(overlapMatrix)))
-    angle1 <- calculateLineAngle(cropLay[overlapMatrix[i, "id.1"]])
-    angle2 <- calculateLineAngle(cropLay[overlapMatrix[i, "id.2"]])
-    # Skip if angle is NA
-    if (is.na(angle1) || is.na(angle2)) next
-    if (round(angle1, 4) != round(angle2, 4)){
-      next
-    } else {
-      line1 <- perim(cropLay[overlapMatrix[i,"id.1"]])
-      line2 <- perim(cropLay[overlapMatrix[i,"id.2"]])
-      smallest <- if (line1 > line2) overlapMatrix[i, id.2] else overlapMatrix[i, id.1]
-      to_remove <- c(to_remove, smallest)
-    }
+    if (i %in% c(1, 1000) || i %% 10000 == 0)
+      message(sprintf("Feature %d of %d", i, nrow(overlapMatrix)))
+    a1 <- calculateLineAngle(cropLay[overlapMatrix[i, "id.1"]])
+    a2 <- calculateLineAngle(cropLay[overlapMatrix[i, "id.2"]])
+    if (is.na(a1) || is.na(a2)) next
+    if (round(a1, 4) != round(a2, 4)) next
+    l1 <- perim(cropLay[overlapMatrix[i, "id.1"]])
+    l2 <- perim(cropLay[overlapMatrix[i, "id.2"]])
+    smallest <- if (l1 > l2) overlapMatrix[i, id.2] else overlapMatrix[i, id.1]
+    to_remove <- c(to_remove, smallest)
   }
   toc()
-  if (length(to_remove) > 0) {
-    cropLay <- cropLay[-unique(to_remove), ]
-  }
-  # End overlapping removal
-
-  # guard against cropLayFinal collapsing to NULL from missing $Potential column
+  if (length(to_remove)) cropLay <- cropLay[-unique(to_remove), ]
+  
+  # 6) cluster by Potential as before
   pots <- unique(cropLay$Potential)
-  if (length(pots) == 0) {
-    warning("createCropLayFinalYear1(): no valid Potential values → returning empty SpatVector")
-    return(list(lines = Lay[0, ], availableArea = potLayTopValid))
+  if (length(pots) == 0L) {
+    warning("createCropLayFinalYear1: no valid Potential values after preprocessing — returning empty.")
+    return(list(lines = Lay[0, ], availableArea = finalPotLay))
   }
   
-  # Loop through the potentials, and make clusters
-  
-  cropLayFinal <- do.call(rbind, lapply(unique(cropLay$Potential), function(Pot){
-    cropLayInt <- Cache(clusterLines, cropLay[cropLay$Potential == Pot,], 
-                        distThreshold = clusterDistance, 
-                        currPotential = Pot,
-                        runInParallel = runClusteringInParallel,
-                        totPotential = length(unique(cropLay$Potential)), 
-                        userTags = studyAreaHash)
-    return(cropLayInt)
+  cropLayFinal <- do.call(rbind, lapply(pots, function(Pot) {
+    Cache(clusterLines,
+          cropLay[cropLay$Potential == Pot, ],
+          distThreshold  = clusterDistance,
+          currPotential  = Pot,
+          runInParallel  = runClusteringInParallel,
+          totPotential   = length(pots),
+          userTags       = studyAreaHash)
   }))
   
-  # now returns list of cropLayFinal AND updated line masked potLayTopValid
+  # 7) consistent list return for updated generator
   return(list(
-    lines           = cropLayFinal,
-    availableArea   = potLayTopValid
+    lines         = cropLayFinal,
+    availableArea = finalPotLay
   ))
 }

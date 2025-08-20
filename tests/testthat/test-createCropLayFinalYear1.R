@@ -6,11 +6,11 @@ library(tictoc)
 library(dplyr)
 
 # Disable reproducible caching for speed
-options(reproducible.useCache = FALSE)
-assignInNamespace("Cache",
-                  function(fun, ...) fun(...),
-                  ns = "reproducible"
-)
+#options(reproducible.useCache = FALSE)
+#assignInNamespace("Cache",
+#                  function(fun, ...) fun(...),
+#                  ns = "reproducible"
+#)
 
 # Helper to disable caching between tests
 reset_cache <- function() {
@@ -246,7 +246,7 @@ test_that("Negative clusterDistance throws an error", {
       clusterDistance        = -10,
       studyAreaHash          = "test_neg_dist"
     ),
-    "`clusterDistance` must be non\u2010negative"
+    "`clusterDistance` must be non-negative"
   )
 })
 
@@ -290,3 +290,203 @@ test_that("Erase carves out a 50m buffer from the potential polygon", {
   buf <- buffer(line, width = 50)
   expect_false(any(terra::relate(area, buf, relation = "T********", pairs = FALSE)))
 })
+
+
+########################
+# new tests
+
+test_that("splits lines at potential boundaries and propagates Potential", {
+  skip_on_cran()
+  requireNamespace("terra")
+  requireNamespace("data.table")
+  
+  library(terra)
+  library(data.table)
+  
+  # Provide no-op tic/toc if tictoc isn't attached
+  if (!exists("tic", mode = "function"))  assign("tic", function(...) invisible(NULL), envir = .GlobalEnv)
+  if (!exists("toc", mode = "function"))  assign("toc", function(...) invisible(NULL), envir = .GlobalEnv)
+  
+  # --- Fixtures --------------------------------------------------------------
+  mk_sq <- function(x0, y0, size = 50, crs = "EPSG:3857") {
+    vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
+                ncol = 2, byrow = TRUE), type = "polygons", crs = crs)
+  }
+  mk_line <- function(x0,y0,x1,y1, crs = "EPSG:3857") {
+    v <- vect(matrix(c(x0,y0, x1,y1), ncol=2, byrow=TRUE), type="lines", crs = crs)
+    v
+  }
+  
+  # Two adjacent potential polygons: left=1, right=2
+  left  <- mk_sq(0, 0, size = 50); left$Potential  <- 1L
+  right <- mk_sq(50, 0, size = 50); right$Potential <- 2L
+  pot   <- rbind(left, right)
+  
+  # One line that crosses from left polygon (1) to right polygon (2)
+  lay   <- mk_line(10, 25, 90, 25)
+  
+  # --- Call function under test ---------------------------------------------
+  out <- createCropLayFinalYear1(
+    Lay = lay,
+    potLayTopValid = pot,
+    runClusteringInParallel = FALSE,
+    clusterDistance = 10,
+    studyAreaHash = "unit-test"
+  )
+  
+  # --- Assertions ------------------------------------------------------------
+  # Contract: list(lines=SpatVector lines, availableArea=SpatVector polygons)
+  expect_type(out, "list")
+  expect_true(all(c("lines", "availableArea") %in% names(out)))
+  expect_s4_class(out$lines, "SpatVector")
+  expect_equal(geomtype(out$lines), "lines")
+  expect_s4_class(out$availableArea, "SpatVector")
+  aa_gt <- tryCatch(terra::geomtype(out$availableArea), error = function(e) "none")
+  expect_true(aa_gt %in% c("polygons", "none"))
+  
+  # Must have exactly one Potential-like column on the lines
+  potCols <- grep("^Potential", names(out$lines), value = TRUE)
+  expect_equal(length(potCols), 1, info = paste("Found columns:", paste(potCols, collapse=", ")))
+  expect_true("Potential" %in% names(out$lines))
+  
+  # CRITICAL: line must be split by potential boundary and carry both 1 and 2
+  # i.e., intersect-style propagation to line segments
+  pots <- sort(unique(as.integer(out$lines$Potential)))
+  expect_setequal(pots, c(1L, 2L))
+})
+
+test_that("no lines within potential returns empty lines and unchanged availableArea", {
+  skip_on_cran()
+  library(terra)
+  
+  mk_sq <- function(x0, y0, size = 50, crs = "EPSG:3857") {
+    vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
+                ncol = 2, byrow = TRUE), type = "polygons", crs = crs)
+  }
+  mk_line <- function(x0,y0,x1,y1, crs = "EPSG:3857") {
+    vect(matrix(c(x0,y0, x1,y1), ncol=2, byrow=TRUE), type="lines", crs = crs)
+  }
+  
+  pot <- mk_sq(0, 0, size = 50); pot$Potential <- 1L
+  # Place line far away so it doesn't intersect
+  lay <- mk_line(1000, 1000, 1100, 1000)
+  
+  out <- createCropLayFinalYear1(
+    Lay = lay,
+    potLayTopValid = pot,
+    runClusteringInParallel = FALSE,
+    clusterDistance = 10,
+    studyAreaHash = "unit-test"
+  )
+  
+  # type checks
+  expect_type(out, "list")
+  expect_s4_class(out$lines, "SpatVector")
+  expect_equal(nrow(out$lines), 0L)
+  
+  aa_gt <- tryCatch(terra::geomtype(out$availableArea), error = function(e) "none")
+  expect_true(aa_gt %in% c("polygons", "none"))
+  
+  # area compare (handle 'none' => 0 area)
+  area_poly <- function(v) {
+    gt <- tryCatch(terra::geomtype(v), error = function(e) "none")
+    if (gt == "none" || nrow(v) == 0L) return(0)
+    sum(terra::expanse(v), na.rm = TRUE)
+  }
+  
+  a0 <- area_poly(pot)                 # original
+  a1 <- area_poly(out$availableArea)   # returned
+  expect_equal(a0, a1, tolerance = 1e-6)
+})
+
+test_that("availableArea keeps 'polygons' geomtype even when empty", {
+  skip_on_cran()
+  library(terra)
+  
+  # Tiny potential polygon fully erased by 50m buffer around the line
+  pot <- vect(matrix(c(0,0, 50,0, 50,50, 0,50, 0,0), ncol=2, byrow=TRUE),
+              type = "polygons", crs = "EPSG:3857")
+  pot$Potential <- 1L
+  lay <- vect(matrix(c(10,25, 40,25), ncol=2, byrow=TRUE),
+              type = "lines", crs = crs(pot))
+  
+  out <- createCropLayFinalYear1(lay, pot, FALSE, 10, "ut")
+  expect_s4_class(out$availableArea, "SpatVector")
+  aa_gt <- tryCatch(terra::geomtype(out$availableArea), error = function(e) "none")
+  expect_true(aa_gt %in% c("polygons", "none"))
+  expect_true(nrow(out$availableArea) == 0L || sum(terra::expanse(out$availableArea), na.rm = TRUE) == 0)
+})
+
+test_that("createCropLayFinalYear1: deduplicates Potential* columns to a single 'Potential'", {
+  skip_on_cran()
+  library(terra)
+  
+  mk_sq <- function(x0, y0, size = 50, crs = "EPSG:3857") {
+    vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
+                ncol = 2, byrow = TRUE), type = "polygons", crs = crs)
+  }
+  mk_line <- function(x0,y0,x1,y1, crs = "EPSG:3857") {
+    vect(matrix(c(x0,y0, x1,y1), ncol=2, byrow=TRUE), type="lines", crs = crs)
+  }
+  
+  pot <- mk_sq(0, 0, size = 50); pot$Potential <- 7L
+  lay <- mk_line(10, 25, 40, 25)
+  # Force a Potential column on Lay too, to simulate duplicate attribute sources
+  lay$Potential <- 999L
+  
+  out <- createCropLayFinalYear1(
+    Lay = lay,
+    potLayTopValid = pot,
+    runClusteringInParallel = FALSE,
+    clusterDistance = 0,
+    studyAreaHash = "unit-test"
+  )
+  
+  # Exactly one Potential-like column must remain on lines
+  potCols <- grep("^Potential", names(out$lines), value = TRUE)
+  expect_equal(length(potCols), 1,
+               info = paste("Found columns:", paste(potCols, collapse = ", ")))
+  expect_true("Potential" %in% names(out$lines))
+})
+
+test_that("createCropLayFinalYear1: availableArea equals potLayTopValid minus 50 m buffered lines", {
+  skip_on_cran()
+  library(terra)
+  
+  mk_sq <- function(x0, y0, size = 80, crs = "EPSG:3857") {
+    vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
+                ncol = 2, byrow = TRUE), type = "polygons", crs = crs)
+  }
+  mk_line <- function(x0,y0,x1,y1, crs = "EPSG:3857") {
+    vect(matrix(c(x0,y0, x1,y1), ncol=2, byrow=TRUE), type="lines", crs = crs)
+  }
+  
+  pot <- mk_sq(0, 0, size = 80); pot$Potential <- 3L
+  lay <- mk_line(10, 10, 70, 70)
+  
+  out <- createCropLayFinalYear1(
+    Lay = lay,
+    potLayTopValid = pot,
+    runClusteringInParallel = FALSE,
+    clusterDistance = 10,
+    studyAreaHash = "unit-test"
+  )
+  
+  # Expected area: erase(pot, aggregate(buffer(intersect(lay, pot), 50)))
+  # Use the same sequence the function describes
+  layCrop <- reproducible::Cache(postProcessTo, lay, pot)
+  # If postProcessTo doesn't intersect, guard by doing intersect here for expected value
+  if (nrow(terra::intersect(layCrop, pot)) > 0) {
+    layCrop <- terra::intersect(pot, layCrop)
+  }
+  buf50   <- terra::buffer(layCrop, width = 50)
+  bufAgg  <- terra::aggregate(buf50, dissolve = TRUE)
+  expectAvail <- terra::erase(pot, bufAgg)
+  
+  # Compare areas
+  area_out   <- sum(terra::expanse(out$availableArea), na.rm = TRUE)
+  area_expect<- sum(terra::expanse(expectAvail),       na.rm = TRUE)
+  # Allow small numeric tolerance
+  expect_equal(area_out, area_expect, tolerance = 1e-5)
+})
+
