@@ -1,31 +1,34 @@
 generateDisturbancesShp <- function(disturbanceParameters,
-                                 disturbanceList,
-                                 rasterToMatch,
-                                 studyArea,
-                                 fires,
-                                 currentTime,
-                                 firstTime,
-                                 growthStepGenerating,
-                                 growthStepEnlargingPolys,
-                                 growthStepEnlargingLines,
-                                 currentDisturbanceLayer,
-                                 connectingBlockSize,
-                                 disturbanceRateRelatesToBufferedArea,
-                                 outputsFolder,
-                                 seismicLineGrids,
-                                 checkDisturbancesForBuffer = FALSE,
-                                 runName,
-                                 useRoadsPackage,
-                                 siteSelectionAsDistributing,
-                                 probabilityDisturbance,
-                                 maskWaterAndMountainsFromLines,
-                                 featuresToAvoid,
-                                 altitudeCut,
-                                 clusterDistance,
-                                 distanceNewLinesFactor,
-                                 runClusteringInParallel,
-                                 useClusterMethod,
-                                 refinedStructure){
+                                    disturbanceList,
+                                    rasterToMatch,
+                                    studyArea,
+                                    fires,
+                                    currentTime,
+                                    firstTime,
+                                    growthStepGenerating, #not used yet
+                                    growthStepEnlargingPolys,
+                                    growthStepEnlargingLines,
+                                    currentDisturbanceLayer,
+                                    connectingBlockSize,
+                                    disturbanceRateRelatesToBufferedArea,
+                                    outputsFolder,
+                                    seismicLineGrids,
+                                    checkDisturbancesForBuffer = FALSE,
+                                    runName,
+                                    useRoadsPackage,
+                                    siteSelectionAsDistributing,
+                                    probabilityDisturbance,
+                                    maskWaterAndMountainsFromLines,
+                                    featuresToAvoid,
+                                    altitudeCut,
+                                    clusterDistance,
+                                    distanceNewLinesFactor,
+                                    runClusteringInParallel,
+                                    useClusterMethod,
+                                    refinedStructure){
+  
+  if (maskWaterAndMountainsFromLines)(Require::Require("spaths"))
+  if (useRoadsPackage)(Require("geodata"))
   
   # Extracting layers from previous ones
   # Total study area
@@ -87,8 +90,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
             # Check if we have the resolution
             if ("resolutionVector" %in% dPar){
               if (originalForm == "lines")
-                RES <- dPar[index, resolutionVector] else 
-                  RES <- dPar[index, resolutionVector]/2
+                RES <- dParOri[["resolutionVector"]]
+              if (isTRUE(originalForm == "points")) RES <- RES/2
             } else RES <- NULL
             if (is.null(RES)){
               message(crayon::red(paste0("resolutionVector in disturbanceParameters",
@@ -213,24 +216,45 @@ generateDisturbancesShp <- function(disturbanceParameters,
   # SECOND: Generating
   #############################################
   message(crayon::white("Generating disturbances..."))
-    # First, mask the current disturbances on the potential layer so we don't choose them again
+  # First, mask the current disturbances on the potential layer so we don't choose them again
   # Get the resolution for lines
-  RES <- unique(disturbanceParameters[["resolutionVector"]])
-  if (length(RES) > 1)
+  RES_list <- disturbanceParameters[["resolutionVector"]]
+  if (is.list(RES_list) && any(lengths(RES_list) > 1)) {
     stop(paste0("Different resolutions have not yet been implemented.",
                 "Please modify the code to allow for it"))
+  }
+  RES <- suppressWarnings(as.numeric(unlist(RES_list, use.names = FALSE)))
+  if (length(RES) == 0L) {
+    RES <- tryCatch({
+      rres <- terra::res(rasterToMatch)
+      as.numeric(mean(rres, na.rm = TRUE))
+    }, error = function(...) NA_real_)
+    if (terra::is.lonlat(rasterToMatch)) {
+      warning("rasterToMatch has a lon/lat CRS; buffer width will be interpreted in degrees. ",
+              "Consider projecting inputs to a metric CRS (e.g., EPSG:3005).")
+    }
+  }
+  RES <- RES[1]
+  if (!is.finite(RES) || RES <= 0) RES <- 7.5
+  
   if (is.null(currentDisturbanceLayer)){
     message(paste0("currentDisturbanceLayer is NULL. This is likely the first year of the",
                    " simulation. Creating current disturbed polygons..."))
     # Current layer is null, which indicates this might be the first year of the simulation. I
     # will need to create it then, based on the existing disturbances.
     # Get all current disturbances
-    unDL <- unlist(disturbanceList)
-    allCurrentDistLayNames <- names(unDL)[!grepl(x = names(unDL), pattern = "potential")]
-    currDist <- unDL[names(unDL) %in% allCurrentDistLayNames]
+    # only pull out the spatial layers, drop anything else (e.g. numeric 1)
+    
+    # flatten the disturbanceList
+    unDL <- unlist(disturbanceList, recursive = FALSE)
+    # keep only the “current” layers (drop anything with "potential" in its name)
+    validNames <- names(unDL)[ ! grepl("potential", names(unDL)) ]
+    unDL <- unDL[ validNames ]
+    # from those, keep only spatial objects (drop numerics, etc.)
+    currDist <- Filter(function(x) inherits(x, c("SpatVector", "sf", "Spatial", "RasterLayer", "SpatRaster")), unDL)
     # Combine all layers, both polygons and lines, separtely
     linesLays <- currDist[sapply(currDist, geomtype) == "lines"]
-    polyLays <- currDist[sapply(currDist, geomtype) == "polygons"]
+    polyLays  <- currDist[sapply(currDist, geomtype) == "polygons"]
     linesLays <- unlist(lapply(linesLays, function(X){
       terra::buffer(x = X, width = RES)
       # Here we need to buffer as this layer will be used to avoid specific locations (i.e., already 
@@ -266,7 +290,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
         # Create allLaysRas, which is the disturbance raster with all disturbances rasterized, with
         # value == 1 for the disturbed pixels. Non-disturbed pixels are NA
   }
-
+  
   dPar <- disturbanceParameters[disturbanceType  %in% "Generating", ]
   if (nrow(dPar) == 0){
     # Means we don't have any Generated (i.e., there is nothing disturbed there!)
@@ -330,7 +354,22 @@ generateDisturbancesShp <- function(disturbanceParameters,
               potLayF[fires[] == 1] <- NA
             # Convert the fire raster to polygons
             potLayT <- rast(potLayF)
-            potLay <- terra::as.polygons(potLayT)
+            #potLay <- terra::as.polygons(potLayT)
+            potLay <- terra::as.polygons(potLayT, values = TRUE, na.rm = TRUE)
+            
+            # ensure the attribute is named "Potential"
+            if (!"Potential" %in% names(potLay)) {
+              if (length(names(potLay)) == 1) names(potLay) <- "Potential" else potLay[["Potential"]] <- 1
+            }
+            
+            # drop non-positive/NA potential just in case
+            potNm <- names(potLay)[1L]  # "Potential" after the block above
+            potLay <- terra::subset(potLay, subset = !is.na(potLay[[potNm]]) & potLay[[potNm]] > 0)
+            
+            # then keep the existing aggregate(dissolve) logic
+            if (NROW(potLay) > 1)
+              potLay <- terra::aggregate(potLay, by = "Potential", dissolve = TRUE, count = FALSE)
+            
             # Third: give preference to cutblocks that are closer to current cutblocks
             # Using terra is quicker!
             # # WITH NWT DATA, THE FOLLOWING LINES ARE USELESS AS ALL FOREST IS CLOSE ENOUGH
@@ -348,19 +387,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
           # We need to aggregate the potential layer to make sure we have all possible polygons with the 
           # same values with the same probability of developing the disturbance
           aggby <- "Potential"
-          if (!"Potential" %in% names(potLay)){ # If we don't have Potential, we need to create it
-            if (length(names(potLay)) == 1){
-              names(potLay) <- "Potential"
-            } else {
-              potLay[["Potential"]] <- 1
-            }
+          if (!"Potential" %in% names(potLay)) { # If we don't have Potential, we need to create it
+            potLay[["Potential"]] <- 1
           }
           if (NROW(potLay) > 1)
             potLay <- aggregate(potLay, by = aggby, dissolve = TRUE, count = FALSE)
           if (length(potLay) == 0){# In case the cropped area doens't have anything
             message(paste0("The potential area for ", Sector, " class ", ORIGIN, " is NULL.",
                            " Likely cropped out from studyArea. Returning NULL."))
-            
+            browser()
             return(NULL)
           }
           
@@ -406,46 +441,120 @@ generateDisturbancesShp <- function(disturbanceParameters,
               message(paste0("Percentage of current area: ", round(100*((currArea/1000000)/totalstudyAreaVAreaSqKm), 3), "%."))
             }
           }
-          # Make sure we select the areas to disturb in a way we have enough space to disturb the necessary
-          # sizes
+          # --- before the while: clamp request & set iteration guards ---
+          nAvail <- nrow(potLay)
+          
+          # Total potential area that could ever be used
+          availArea <- suppressWarnings(
+            terra::expanse(terra::aggregate(potLay, dissolve = TRUE),
+                           transform = FALSE, unit = "m")
+          )
+          if (is.finite(availArea) && !is.na(availArea) && availArea < expectedNewDisturbAreaSqM) {
+            warning(sprintf(
+              "Requested area (%.2f m²) exceeds available potential (%.2f m²); clamping.",
+              as.numeric(expectedNewDisturbAreaSqM), as.numeric(availArea)
+            ))
+            expectedNewDisturbAreaSqM <- availArea
+          }
+          # Hard stop so we never loop forever even if nothing changes
+          maxITR   <- max(5L, nAvail + 5L)
+          prevTotal <- -Inf
+          tol       <- 1e-6
+          
+          # Make sure we select the areas to disturb in a way we have enough space to disturb the necessary sizes
           ITR <- 1
           totalAreaAvailable <- 0
-          # # Now check if there is enough space for the expected disturbance!
-          # # 1.2. We need to chose the best places:
-          while (totalAreaAvailable < expectedNewDisturbAreaSqM){
-            # Get the possible places for the disturbances. Make sure there is enough place! Best potential 
-            # are the places with max values
-            valuesAvailable <- sort(as.numeric(unlist(potLay[[names(potLay)]])))
-            if (ORIGIN %in% siteSelectionAsDistributing){
-              rowsToChoose <- 1:length(valuesAvailable)
+          
+          # 1.2. We need to choose the best places:
+          while (totalAreaAvailable < expectedNewDisturbAreaSqM) {
+            # Get the possible places for the disturbances. Best potential are the places with max values
+            potVals <- terra::values(potLay, mat = FALSE)[, "Potential", drop = TRUE]
+            if (is.list(potVals))   potVals <- unlist(potVals, use.names = FALSE)
+            if (is.factor(potVals)) potVals <- as.character(potVals)
+            potVals <- suppressWarnings(as.numeric(potVals))
+            
+            # guard
+            if (!length(potVals) || all(is.na(potVals))) {
+              warning("No usable numeric values in 'Potential' after extraction. Stopping.")
+              break
+            }
+            
+            # keep sort if you use it elsewhere; row-windowing is based on feature count
+            valuesAvailable <- sort(potVals)
+            
+            if (ORIGIN %in% siteSelectionAsDistributing) {
+              rowsToChoose <- seq_len(nAvail)
             } else {
-              rowsToChoose <- (length(valuesAvailable)-(ITR-1)):length(valuesAvailable)
+              rowsToChoose <- max(1, nAvail - (ITR - 1)) : nAvail
             }
             potLayTop <- potLay[rowsToChoose]
+            
             # Now exclude where disturbance already exists
             # Use intersect to see if they overlap.
             if (!ORIGIN == "seismicLines") # For seismic lines, intersection happens below
               message(paste0("Intersecting existing disturbances with potential for development for ",
                              Sector, " -- ", ORIGIN))
-            if (Sector == "forestry"){
-              croppedAllLays <- reproducible::cropInputs(allLays, potLayTop)
-              potLayTopValid <- terra::erase(potLayTop, croppedAllLays) # BEST AREA!
-            } else
-              if (!ORIGIN == "seismicLines") { # If "seismicLines", we don't need to erase as they can overlap
+            if (Sector == "forestry") {
+              # only try to erase if there _are_ existing disturbances
+              if (inherits(allLays, "SpatVector") && nrow(allLays) > 0) {
+                # remove any existing disturbances
+                croppedAllLays <- reproducible::cropInputs(allLays, potLayTop)
+                potLayTopValid <- terra::erase(potLayTop, croppedAllLays)
+              } else {
+                # no existing disturbances → full potential, then exit loop
+                potLayTopValid <- potLayTop
+                totalAreaAvailable <- terra::expanse(
+                  terra::aggregate(potLayTopValid, dissolve = TRUE),
+                  unit = "m", transform = FALSE
+                )
+                break
+              }
+            } else if (!ORIGIN == "seismicLines") { # If "seismicLines", we don't need to erase as they can overlap
+              if (is.null(allLays) || !inherits(allLays, "SpatVector") || nrow(allLays) == 0) {
+                potLayTopValid <- potLayTop
+              } else {
                 doIntersect <- terra::intersect(allLays, potLayTop)
-                if (nrow(doIntersect) > 0){
-                  # If so, erase.
+                if (inherits(doIntersect, "SpatVector") && nrow(doIntersect) > 0) {
                   croppedAllLays <- reproducible::cropInputs(allLays, potLayTop)
-                  potLayTopValid <- terra::erase(potLayTop, croppedAllLays) # BEST AREA!
-                } else {        
-                  # If not, move on
+                  potLayTopValid <- terra::erase(potLayTop, croppedAllLays)
+                } else {
                   potLayTopValid <- potLayTop
                 }
-              } else potLayTopValid <- potLayTop
+              }
+            } else {
+              potLayTopValid <- potLayTop
+            }
+            
+            # If everything got erased, there's nothing more to add — stop
+            if (!inherits(potLayTopValid, "SpatVector") || nrow(potLayTopValid) == 0) {
+              warning("No valid potential features remain after erasing/intersection. Stopping.")
+              break
+            }
             
             # Now check if there is enough space for the expected disturbance!
-            totalAreaAvailable <- tryCatch(terra::expanse(terra::aggregate(potLayTopValid, dissolve = TRUE), 
-                                                          transform = FALSE, unit = "m"), error = function(e) browser())
+            totalAreaAvailable <- tryCatch(
+              terra::expanse(terra::aggregate(potLayTopValid, dissolve = TRUE),
+                             transform = FALSE, unit = "m"),
+              error = function(e) {
+                warning("Failed to compute expanse; stopping. ", conditionMessage(e))
+                NA_real_
+              }
+            )
+            
+            # --- termination guard: no progress or too many iterations ---
+            if (!is.finite(totalAreaAvailable) || is.na(totalAreaAvailable)) {
+              warning("Total available area could not be computed (NA/Inf). Stopping.")
+              break
+            }
+            if (ITR > maxITR || abs(totalAreaAvailable - prevTotal) < tol) {
+              warning(sprintf(
+                "Stopping after %d iterations: no more usable potential (%.2f m² of %.2f m² requested).",
+                ITR - 1, as.numeric(totalAreaAvailable), as.numeric(expectedNewDisturbAreaSqM)
+              ))
+              break
+            }
+            prevTotal <- totalAreaAvailable
+            
             ITR <- ITR + 1
           }
           
@@ -496,25 +605,41 @@ generateDisturbancesShp <- function(disturbanceParameters,
           # For seismic Lines we need to do some area processing of the before we can 
           # generate the disturnances. And we don't want to repeat this every time inside
           # a while loop, as it doesn't change, so we do it outside
-          if (ORIGIN == "seismicLines"){
-            if (firstTime){
-              message("First time generating sesmicLines, proceeding with clustering...")
-              cropLayFinal <- Cache(createCropLayFinalYear1, 
-                                    Lay = Lay, 
-                                    potLayTopValid = potLayTopValid, 
-                                    runClusteringInParallel = runClusteringInParallel, 
-                                    clusterDistance = clusterDistance, 
-                                    studyAreaHash = studyAreaHash)
-              terra::writeVector(x = cropLayFinal, 
-                                 filename = file.path(outputsFolder, 
-                                                      paste0("seismicLinesYear", 
-                                                             currentTime, 
-                                                             "_",
-                                                             studyAreaHash,
-                                                             ".shp")),
-                                 overwrite = TRUE)
+          if (ORIGIN == "seismicLines") {
+            if (firstTime) {
+              message("First time generating seismicLines, proceeding with clustering...")
+              out_createCropLay <- Cache(
+                createCropLayFinalYear1,
+                Lay                    = Lay,
+                potLayTopValid         = potLayTopValid,
+                runClusteringInParallel= runClusteringInParallel,
+                clusterDistance        = clusterDistance,
+                studyAreaHash          = studyAreaHash
+              )
+              cropLayFinal   <- out_createCropLay$lines
+              potLayTopValid <- out_createCropLay$availableArea
+              
+              suppressWarnings(
+                terra::writeVector(
+                  x         = cropLayFinal,
+                  filename  = file.path(
+                    outputsFolder,
+                    paste0("seismicLinesYear", currentTime, "_", studyAreaHash, ".shp")
+                  ), overwrite = TRUE
+                )
+              )
             } else {
-              cropLayFinal <- Lay
+              # reuse last year's clustered lines (with Pot_Clus)
+              if (
+                !is.null(currentDisturbanceLayer) &&
+                !is.null(currentDisturbanceLayer[[Sector]]) &&
+                !is.null(currentDisturbanceLayer[[Sector]][[ORIGIN]])
+              ) {
+                cropLayFinal <- currentDisturbanceLayer[[Sector]][[ORIGIN]]
+              } else {
+                cropLayFinal <- Lay
+                warning("No prior seismicLines in currentDisturbanceLayer; falling back to raw `Lay` (no Pot_Clus).")
+              }
             }
           }
           
@@ -538,6 +663,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
             # 1.1. Get each disturbance's size. If the expected disturbance is smaller than the 
             # normal size, we only disturb what is expected
             Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
+            remaining <- max(0, expectedNewDisturbAreaSqM - areaChosenTotal)
+            if (remaining <= 0) break
+            if (Size > remaining) Size <- remaining
             # If the Size is larger than expectedNewDisturbAreaSqM, we might first make a probability of 
             # the disturbance happening. 
             if (Size > expectedNewDisturbAreaSqM){
@@ -571,6 +699,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 # clusters to be duplicated. This duplication will then get VERY close to the expected area,
                 # likely slightly below (as not many lines overlap) --> The smaller the buffer 
                 # (clusterDistance and distanceNewLinesFactor) new lines will be closer 
+                while (is.list(cropLayFinal) && length(cropLayFinal) == 1) {
+                  cropLayFinal <- cropLayFinal[[1]]
+                }
                 
                 if (geomtype(cropLayFinal) != "lines"){
                   print("cropLayFinal needs to be lines and needs to have all previous lines")
@@ -772,7 +903,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
               if (is.na(newDist)) browser()
               #########################
               
-              names(newDist) <- names(centerPoint)
+              cn <- names(centerPoint)
+              if (length(cn) == ncol(newDist)) names(newDist) <- cn
               # 1.4. If we relate to buffered area, we need to make an inner buffer, as it is included in 
               # areaChosenTotal.
               if (disturbanceRateRelatesToBufferedArea){
@@ -805,9 +937,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
               if (nrow(newDistBuff) > 1){
                 newDistBuff <- terra::aggregate(newDistBuff)
               }
-              areaChosenTotal <- areaChosenTotal + terra::expanse(newDistBuff, unit = "m", transform = FALSE)
+              areaChosenTotal <- areaChosenTotal + sum(terra::expanse(newDistBuff, unit = "m", transform = FALSE))
             } else { 
-              areaChosenTotal <- areaChosenTotal + terra::expanse(newDist, unit = "m", transform = FALSE)
+              areaChosenTotal <- areaChosenTotal + sum(terra::expanse(newDist, unit = "m", transform = FALSE))
             }
             if (geomtype(newDist) %in% c("points", "lines")){
               if (IT == 2)
@@ -1000,68 +1132,22 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                          lines = TRUE)
           # 4. Update the endLayer with the new connection
           if (!is(connectedOne, "SpatVector")){
-            {
-              cExt <- ext(connected)
-              if (any(is.nan(cExt[1:4]))){
-                print("Point44.2")
-                browser()
-              }
-            }
             connectedOne <- terra::vect(connectedOne)
-            {
-              cExt <- ext(connected)
-              if (any(is.nan(cExt[1:4]))){
-                print("Point44.1")
-                browser()
-              }
-            }
-            
           }
-          if (exists("connected")){
-            {
-              cExt <- ext(connected)
-              if (any(is.nan(cExt[1:4]))){
-                print("Point4.00")
-                browser()
-              }
-            }
+          if (exists("connected", inherits = FALSE)){
             connected <- rbind(connected, connectedOne)
-            {
-              cExt <- ext(connected)
-              if (any(is.nan(cExt[1:4]))){
-                print("Point4.0")
-                browser()
-              }
-            }
-            
           } else {
-            {
-              cExt <- ext(connected)
-              if (any(is.nan(cExt[1:4]))){
-                print("Point4.21")
-                browser()
-              }
-            }
             connected <- connectedOne
-            {
-              cExt <- ext(connected)
-              if (any(is.nan(cExt[1:4]))){
-                print("Point4.31")
-                browser()
-              }
-            }
           }
           endLay <- rbind(endLay, connectedOne)
         }          
       } else {
-        if (any(useRoadsPackage, maskWaterAndMountainsFromLines)){
-          Require("geodata")
+        if (isTRUE(useRoadsPackage) || (isTRUE(maskWaterAndMountainsFromLines) && is.null(featuresToAvoid))) {
           DEMraw <- elevation_30s(country = "CAN", path = Paths[["inputPath"]])
           DEM <- postProcessTo(from = DEMraw, to = rasterToMatch, cropTo = studyArea, 
                                projectTo = rasterToMatch, maskTo = studyArea, 
                                writeTo = file.path(Paths[["inputPath"]], 
-                                                   paste0("DEM_", 
-                                                          reproducible::.robustDigest(studyArea))))
+                                                   paste0("DEM_", reproducible::.robustDigest(studyArea))))
         }
         if (useRoadsPackage){
           # Need to create `connected`
@@ -1111,7 +1197,19 @@ generateDisturbancesShp <- function(disturbanceParameters,
               message(paste0("Connecting ", Sector," for year ", currentTime,
                              ": ", i ," of ", NROW(oriLayVect),
                              " (", 100*round(i/NROW(oriLayVect),4),"%)"))
-            endLayCropped <- terra::crop(endLay, oriLayVect[i, ])  
+            # avoid error on invalid geometries from cropping
+            oi <- oriLayVect[i, ]
+            # If terra has makeValid(), use it; otherwise go via sf
+            valid_oi <- try(terra::is.valid(oi), silent = TRUE)
+            if (inherits(valid_oi, "try-error") || isFALSE(valid_oi)) {
+              # fallback through sf to repair
+              oi_sf <- sf::st_as_sf(oi)
+              if (any(!sf::st_is_valid(oi_sf))) {
+                oi_sf <- sf::st_make_valid(oi_sf)
+              }
+              oi <- terra::vect(oi_sf)
+            }
+            endLayCropped <- terra::crop(endLay, oi)
             if (!NROW(endLayCropped) == 0){ # If you still have overlap with the crop, make sure they really overlap
               intersectedOriEnd <- terra::intersect(endLayCropped, oriLayVect[i, ])
               if (!NROW(intersectedOriEnd) == 0){
@@ -1126,35 +1224,43 @@ generateDisturbancesShp <- function(disturbanceParameters,
               browser()
             } 
             if (maskWaterAndMountainsFromLines){
-              Require::Require("spaths")
-              px <- extract(rasterToMatch, ext(oriLayVect[i, ]), cells = TRUE)
-              oRas <- copy(rasterToMatch)
-              oRas[] <- 0
-              oRas[px[["cell"]]] <- 1
-              cEndLay <- terra::nearest(oriLayVect[i, ], endLay, 
-                                        pairs = FALSE, 
-                                        centroids = TRUE, 
-                                        lines = FALSE)
-              message(paste0("Finding shortest path for feature ", i, " of ", NROW(oriLayVect),
-                             ": ", 100*round(i/NROW(oriLayVect), 4),"% of ", 
-                             Sector," (",disturbanceOrigin,
-                             ") for year ", currentTime))
-              connectedOne <- tryCatch({
-                spaths::shortest_paths(rst = oRas, origins = oriLayVect[i, ],
-                                       destinations = cEndLay,
-                                       update_rst = as.polygons(featuresToAvoid), 
-                                       output = "lines", show_progress = FALSE)
-              }, error = function(e){
-                print("Caught error in shortest path.")
-                browser()
-              })
-              if (any(is.nan(ext(connectedOne[connectedOne$layer > 0,])[1:4]))){
-                print(paste0("NaN being created likely because features to avoid",
-                             "are within all possible solutions. Trying to fix it..."))
-                connectedOne <- terra::aggregate(connectedOne)
-              } else {
-                connectedOne <- connectedOne[connectedOne$layer > 0,]
+              # crop the avoidance mask around the current origin
+              cost <- terra::rast(rasterToMatch)
+              cost[] <- 1
+              
+              if (inherits(featuresToAvoid, "SpatRaster")) {
+                cost[is.na(featuresToAvoid[])] <- NA
+              } else if (inherits(featuresToAvoid, "SpatVector")) {
+                # rasterize obstacles (polygons) to NA
+                forbid <- terra::rasterize(featuresToAvoid, cost, field = 1)
+                cost[!is.na(forbid[])] <- NA
               }
+              
+              # Destination: nearest road/target geometry as a line-to-point mapping
+              cEndLay <- terra::nearest(oriLayVect[i, ], endLay, pairs = FALSE, centroids = TRUE, lines = FALSE)
+              
+              connectedOne <- tryCatch(
+                spaths::shortest_paths(
+                  rst         = cost,
+                  origins     = oriLayVect[i, ],
+                  destinations= cEndLay,
+                  output      = "lines",
+                  show_progress = FALSE
+                ),
+                error = function(e) NULL
+              )
+              
+              # If nothing came back, skip this origin
+              if (!inherits(connectedOne, "SpatVector") || nrow(connectedOne) == 0) next
+              
+              # Some spaths builds add a 'layer' field; if present, keep only > 0
+              if ("layer" %in% names(connectedOne)) {
+                connectedOne <- connectedOne[connectedOne$layer > 0, ]
+                if (nrow(connectedOne) == 0) next
+              }
+              
+              # Ensure SpatVector and proceed (no ext() checks)
+              if (!inherits(connectedOne, "SpatVector")) connectedOne <- terra::vect(connectedOne)
               
               # message("***** END Finding shortest paths *******")
             } else {
@@ -1169,47 +1275,10 @@ generateDisturbancesShp <- function(disturbanceParameters,
             }
             # 4. Update the endLayer with the new connection
             if (!is(connectedOne, "SpatVector")){
-              {
-                cExt <- ext(connectedOne)
-                if (any(is.nan(cExt[1:4]))){
-                  print("Point2.1")
-                  browser()
-                }
-              }
               connectedOne <- terra::vect(connectedOne)
-              {
-                cExt <- ext(connectedOne)
-                if (any(is.nan(cExt[1:4]))){
-                  print("Point2.2")
-                  browser()
-                }
-              }
-              
             }
             if (exists("connected")){
-              {
-                cExt <- ext(connected)
-                if (any(is.nan(cExt[1:4]))){
-                  print("Point0000")
-                  browser()
-                }
-              }
               connected <- rbind(connected, connectedOne)
-              {
-                cExt <- ext(connectedOne)
-                if (any(is.nan(cExt[1:4]))){
-                  print("Point1111")
-                  browser()
-                }
-              }
-              {
-                cExt <- ext(connected)
-                if (any(is.nan(cExt[1:4]))){
-                  print("Point2222")
-                  browser()
-                }
-              }
-              
             } else {
               connected <- connectedOne
             }
@@ -1222,6 +1291,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
       if (!exists("connected")){ # It's likely because the one or few created disturbances were 
         # overlapping with their final connection. This means, connected doesn't exist and we need to 
         # return(NULL)
+        browser()
         return(NULL)
       }
       connected[["Class"]] <- na.omit(classEndLay)
@@ -1272,67 +1342,70 @@ generateDisturbancesShp <- function(disturbanceParameters,
     updatedToMerge <- Connected[names(Connected) %in% whichSectorHasOne]
     Connected <- c(updatedToMerge, merged)
   }
-
+  
   # LAST: Updating and returning
   #############################################
   
   # Put all updated layers in a list to return
-  individuaLayers <- c(Enlarged, Generated, Connected)
+  individualLayers <- c(Enlarged, Generated, Connected)
   
-  if (is.null(individuaLayers)){
+  if (is.null(individualLayers)){
     stop("The study area has no potential for disturbances. Please enlarge or change the area.")
   }
   # Now merge all disturbances (raster format) to avoid creating new disturbances where it has 
   # already been disturbed
-  currentDisturbance <- copy(individuaLayers)
+  currentDisturbance <- copy(individualLayers)
   
-    curDistRas <- lapply(1:length(currentDisturbance), function(index1){
-
+  curDistRas <- lapply(1:length(currentDisturbance), function(index1){
+    
     SECTOR <- names(currentDisturbance)[index1]
     if (is.null(currentDisturbance[[index1]])){ 
       # If NULL on the outter side, return NULL
       curDistRas <- NULL
     } else {
       maxLeng <- length(currentDisturbance[[index1]])
-    curDistRas <- lapply(1:maxLeng, function(index2){
-      Class <- names(currentDisturbance[[index1]])[index2]
-      ras <- currentDisturbance[[index1]][[index2]]
-      isNULLras <- is.null(ras)
-      isMAX0ras <- if (is(ras, "SpatVector"))
-        length(ras) == 0 else
-          max(ras[], na.rm = TRUE) == 0
-      if (any(isNULLras, isMAX0ras)){
-        message(paste0(Class, " of ", SECTOR, " is NULL. Returning NULL"))
-        return(NULL)
-      }
-      if (class(ras) %in% c("RasterLayer", "SpatRaster")){
-        message(paste0("Converting ", Class, " of ", SECTOR, " from raster to vector..."))
-        if (!is(ras, "SpatRaster"))
-          ras <- rast(ras)
-        ras[ras != 1] <- NA
-        currentDisturbanceLay <- terra::as.polygons(ras)
-        return(currentDisturbanceLay)
-      } else {
-        if (!is(ras, "SpatVector")){
-          message(paste0(Class, " of ", SECTOR, " is not SpatVector, converting to it..."))
-          ras <- rast(ras)
+      curDistRas <- lapply(1:maxLeng, function(index2){
+        Class <- names(currentDisturbance[[index1]])[index2]
+        ras <- currentDisturbance[[index1]][[index2]]
+        isNULLras <- is.null(ras)
+        isMAX0ras <- if (is(ras, "SpatVector")) {
+          length(ras) == 0
         } else {
-          message(paste0(Class, " of ", SECTOR, " is either already a SpatVector or NULL, skipping conversion..."))
+          vals <- tryCatch(ras[], error = function(e) NULL)
+          if (is.null(vals) || !any(is.finite(vals))) TRUE else max(vals, na.rm = TRUE) == 0
         }
-        return(ras)
-      }
-    })
-    if (!is.null(unlist(curDistRas))){
-      if (length(curDistRas) == length(names(currentDisturbance[[index1]]))){
-        names(curDistRas) <- names(currentDisturbance[[index1]])
+        if (any(isNULLras, isMAX0ras)){
+          message(paste0(Class, " of ", SECTOR, " is NULL. Returning NULL"))
+          return(NULL)
+        }
+        if (class(ras) %in% c("RasterLayer", "SpatRaster")){
+          message(paste0("Converting ", Class, " of ", SECTOR, " from raster to vector..."))
+          if (!is(ras, "SpatRaster"))
+            ras <- rast(ras)
+          ras[ras != 1] <- NA
+          currentDisturbanceLay <- terra::as.polygons(ras)
+          return(currentDisturbanceLay)
+        } else {
+          if (!is(ras, "SpatVector")){
+            message(paste0(Class, " of ", SECTOR, " is not SpatVector, converting to it..."))
+            ras <- rast(ras)
+          } else {
+            message(paste0(Class, " of ", SECTOR, " is either already a SpatVector or NULL, skipping conversion..."))
+          }
+          return(ras)
+        }
+      })
+      if (!is.null(unlist(curDistRas))){
+        if (length(curDistRas) == length(names(currentDisturbance[[index1]]))){
+          names(curDistRas) <- names(currentDisturbance[[index1]])
+        } else {
+          warning("Rasters are not NULL, but the number of rasters doesn't match the number of names. Please debug.", 
+                  immediate. = TRUE)
+          browser()
+        }
       } else {
-        warning("Rasters are not NULL, but the number of rasters doesn't match the number of names. Please debug.", 
-                immediate. = TRUE)
-        browser()
+        message(paste0("The current disturbance raster for ", SECTOR, " is NULL. Returning without internal names."))
       }
-    } else {
-      message(paste0("The current disturbance raster for ", SECTOR, " is NULL. Returning without internal names."))
-    }
     }
     return(curDistRas)
   })
@@ -1343,13 +1416,13 @@ generateDisturbancesShp <- function(disturbanceParameters,
             immediate. = TRUE)
     browser()
   }
-    # Cleanup the NULLS!
-    curDistRas <- cleanupList(curDistRas, 
-                              outter = TRUE, 
-                              inner = TRUE, 
-                              cleanEmpty = TRUE, 
-                              nullEmpty = FALSE)
-
+  # Cleanup the NULLS!
+  curDistRas <- cleanupList(curDistRas, 
+                            outter = TRUE, 
+                            inner = TRUE, 
+                            cleanEmpty = TRUE, 
+                            nullEmpty = FALSE)
+  
   ########################### FINAL LAYERS ###########################
   
   # individualLayers: mixed rasters and vectors, coming directly from the disturbances generated
@@ -1408,22 +1481,22 @@ generateDisturbancesShp <- function(disturbanceParameters,
   ### RETURN!
   if (firstTime){
     seismicLinesFirstYear <- vect(file.path(outputsFolder, 
-                                                paste0("seismicLinesYear", 
-                                                       currentTime, 
-                                                       "_",
-                                                       studyAreaHash,
-                                                       ".shp")))
+                                            paste0("seismicLinesYear", 
+                                                   currentTime, 
+                                                   "_",
+                                                   studyAreaHash,
+                                                   ".shp")))
   } else {
     seismicLinesFirstYear <- NULL
   }
-
-  individuaLayers <- cleanupList(individuaLayers, 
-                              outter = TRUE, 
-                              inner = TRUE, 
-                              cleanEmpty = TRUE, 
-                              nullEmpty = FALSE)
   
-  return(list(individuaLayers = individuaLayers, 
-       currentDisturbanceLayer = curDistRas,
-       seismicLinesFirstYear = seismicLinesFirstYear))
+  individualLayers <- cleanupList(individualLayers, 
+                                  outter = TRUE, 
+                                  inner = TRUE, 
+                                  cleanEmpty = TRUE, 
+                                  nullEmpty = FALSE)
+  
+  return(list(individualLayers = individualLayers, 
+              currentDisturbanceLayer = curDistRas,
+              seismicLinesFirstYear = seismicLinesFirstYear))
 }
