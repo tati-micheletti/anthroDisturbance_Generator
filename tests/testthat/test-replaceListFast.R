@@ -27,7 +27,7 @@ test_that("createdInSimulationTime is stamped on new SpatVector for settlements"
 
 test_that("Enlarging type replaces old layer entirely for wind", {
   # old was empty, so we should see exactly the new feature
-  new_extent <- ext(updAll$individuaLayers$wind$windTurbines)
+  new_extent <- ext(updAll$individualLayers$wind$windTurbines)
   result     <- out$wind[["windTurbines"]]
   expect_s4_class(result, "SpatVector")
   expect_equal(terra::xmin(ext(result)), terra::xmin(new_extent))
@@ -70,10 +70,10 @@ test_that("Potential layers are preserved alongside updates", {
 
 test_that("existing createdInSimulationTime in currDist is not overwritten", {
   # Prepare an updated layer with its own timestamp
-  curr <- updAll$individuaLayers$settlements$settlements
+  curr <- updAll$individualLayers$settlements$settlements
   curr$createdInSimulationTime <- 99
   upd2 <- updAll
-  upd2$individuaLayers$settlements$settlements <- curr
+  upd2$individualLayers$settlements$settlements <- curr
   
   out2 <- replaceListFast(
     disturbanceList       = distList,
@@ -90,7 +90,7 @@ test_that("existing createdInSimulationTime in currDist is not overwritten", {
 test_that("raster + raster merging yields SpatVector", {
   # Force both past and curr mining layers to be SpatRaster
   distList2 <- distList
-  distList2$mining$mining <- updAll$individuaLayers$mining$mining
+  distList2$mining$mining <- updAll$individualLayers$mining$mining
   
   out3 <- replaceListFast(
     disturbanceList       = distList2,
@@ -110,7 +110,7 @@ test_that("Enlarging with non-empty disturbanceEnd merges rather than replaces (
     st_sfc(st_linestring(rbind(c(1,5), c(2,5))), crs = crs(r))
   )
   upd3 <- updAll
-  upd3$individuaLayers$pipelines <- list(roads = new_roads)
+  upd3$individualLayers$pipelines <- list(roads = new_roads)
   
   # Modify parameters so 'roads' is marked Enlarging *but* disturbanceEnd != ""
   distParam3 <- copy(distParam)
@@ -164,7 +164,7 @@ test_that("potential layers always come first in each sector", {
 
 test_that("missing updates returns NULL for forestry when no updatedLayers provided", {
   upd2 <- updAll
-  upd2$individuaLayers$forestry <- list()  # simulate no new forestry updates
+  upd2$individualLayers$forestry <- list()  # simulate no new forestry updates
   
   out2 <- replaceListFast(
     disturbanceList       = distList,
@@ -184,7 +184,7 @@ test_that("same-class, same-geometry merge for mining polygons (no buffering)", 
     ))), crs = crs(r))
   )
   upd3 <- updAll
-  upd3$individuaLayers$mining$mining <- new_poly2
+  upd3$individualLayers$mining$mining <- new_poly2
   
   # ensure mining remains “Generating” so it merges rather than replaces
   distParam3 <- copy(distParam)
@@ -209,7 +209,7 @@ test_that("same-class, same-geometry merge for mining polygons (no buffering)", 
 test_that("unsupported class combination throws a clear error for a non-Enlarging sector", {
   upd4 <- updAll
   # pipelines is GENERATING by default
-  upd4$individuaLayers$pipelines <- list(
+  upd4$individualLayers$pipelines <- list(
     roads = list(foo = "bar")
   )
   
@@ -232,7 +232,7 @@ test_that("multi-layer updates with mixed types in pipelines sector", {
   crs(new_roads) <- crs(r)
   
   upd2 <- updAll
-  upd2$individuaLayers$pipelines <- list(
+  upd2$individualLayers$pipelines <- list(
     pipelines = new_pipe,
     roads     = new_roads
   )
@@ -266,7 +266,7 @@ test_that("Enlarging with disturbanceEnd != '' merges rather than replaces for s
   crs(new_set) <- crs(r)
   
   upd2 <- updAll
-  upd2$individuaLayers$settlements <- list(settlements = new_set)
+  upd2$individualLayers$settlements <- list(settlements = new_set)
   
   distParam2 <- copy(distParam)
   # make settlements Enlarging but with non-empty end -> merge
@@ -294,7 +294,7 @@ test_that("NULL pastDist with non-null currDist returns currDist for forestry", 
   crs(new_fb) <- crs(r)
   
   upd2 <- updAll
-  upd2$individuaLayers$forestry <- list(cutblocks = new_fb)
+  upd2$individualLayers$forestry <- list(cutblocks = new_fb)
   
   out2 <- replaceListFast(distList2, upd2, currentTime = 42, disturbanceParameters = distParam)
   result <- out2$forestry$cutblocks
@@ -312,7 +312,7 @@ test_that("when pastDist is NULL and currDist is a raster, returns raster and no
   
   # No past disturbance; only a new raster layer for 'mining::mining'
   disturbanceList <- list(mining = list(mining = NULL))
-  updatedLayersAll <- list(individuaLayers = list(mining = list(mining = r)))
+  updatedLayersAll <- list(individualLayers = list(mining = list(mining = r)))
   disturbanceParameters <- data.table(
     dataName = "mining", disturbanceOrigin = "mining",
     disturbanceEnd = "", disturbanceType = "Generating"
@@ -342,7 +342,7 @@ test_that("merged vector overwrites a numeric 'Class' with the layer name as cha
   curr <- vect(matrix(c(6,0, 10,0, 10,4, 6,4, 6,0), ncol = 2, byrow = TRUE), type = "polygons", crs = crs_str)
   
   disturbanceList   <- list(mining = list(mining = past))
-  updatedLayersAll  <- list(individuaLayers = list(mining = list(mining = curr)))
+  updatedLayersAll  <- list(individualLayers = list(mining = list(mining = curr)))
   disturbanceParameters <- data.table(
     dataName = "mining", disturbanceOrigin = "mining",
     disturbanceEnd = "", disturbanceType = "Generating"
