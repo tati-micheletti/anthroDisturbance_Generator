@@ -641,6 +641,7 @@ generateDisturbances <- function(disturbanceParameters,
       names(newDistLay) <- ORIGIN
       newDistLay[newDistLay == 1] <- 0
       newDistLay[whichPixelsChosen] <- 1
+      totPixBuff <-  if (disturbanceRateRelatesToBufferedArea) nPixChosenTotal else length(whichPixelsChosen)
       if (disturbanceRateRelatesToBufferedArea){ 
         # Because of the projection problem described below,
         # this whole section is a moot point. Using instead what was previously calculated.
@@ -656,7 +657,6 @@ generateDisturbances <- function(disturbanceParameters,
         # newDistLayBuff2[newDistLayBuff2 == -1] <- NA
         # howManyPixelsChosenBuff <- sum(newDistLayBuff2[], na.rm = TRUE)
         # totPixBuff <- sum(length(whichPixelsChosen), howManyPixelsChosenBuff)
-        totPixBuff <- nPixChosenTotal
         calcPerc <- (totPixBuff - expectedDistPixels)/expectedDistPixels
       } else {
         calcPerc <- (length(whichPixelsChosen) - expectedDistPixels)/expectedDistPixels
