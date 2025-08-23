@@ -6,17 +6,15 @@ suppressPackageStartupMessages({
   library(testthat)
 })
 
-# --- shared raster / study area ------------------------------------------------
-r  <- rast(nrows = 100, ncols = 100, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, vals = 1)
+# --- study raster / study area: 10 km x 10 km (100 km²) ----------------------
+r  <- rast(nrows = 200, ncols = 200, xmin = 0, xmax = 10000, ymin = 0, ymax = 10000, vals = 1)
 crs(r) <- "EPSG:3005"
-sa <- as.polygons(ext(r))
-crs(sa) <- crs(r)
+sa <- as.polygons(ext(r)); crs(sa) <- crs(r)
 
 # Some module code expects this global
 Paths <<- list(outputPath = tempdir())
 
-# Resolution used by module for line/point buffering.
-# Keep scalar, the generator expects a single unique numeric (15 m is a safe default).
+# Resolution used by module for line/point buffering (see Enlarging logic).
 .DEFAULT_RESOLUTION <- 15
 
 # Wrap sf -> SpatVector and attach "Class"; for *potential* layers add defaults if missing
@@ -34,46 +32,54 @@ to_sv <- function(sf_geom, class_name, crs_str) {
   v
 }
 
-#— 1) create the *baseline* disturbanceList, including a dummy sectorX -------
+#— 1) create the baseline disturbanceList -------------------------------------
 createDisturbanceList <- function(crs_str = "EPSG:3005") {
-  # settlements (tiny seed)
-  poly1 <- st_polygon(list(rbind(c( 50,  50), c( 50, 150), c(150, 150), c(150,  50), c( 50,  50))))
-  settlements          <- to_sv(st_sfc(poly1), "settlements",          crs_str)
-  potentialSettlements <- to_sv(st_buffer(st_sfc(poly1), 150), "potentialSettlements", crs_str)
+  # settlements (seed ~1200x1200 m)
+  poly1 <- st_polygon(list(rbind(c( 800,  800), c( 800, 2000), c(2000, 2000), c(2000,  800), c( 800,  800))))
+  settlements          <- to_sv(st_sfc(poly1), "settlements",           crs_str)
+  potentialSettlements <- to_sv(st_buffer(st_sfc(poly1), 1500), "potentialSettlements", crs_str)
   
-  # wind (no existing, a couple of potential points)
+  # wind (no existing; a few potential points)
   windTurbines          <- suppressWarnings(to_sv(st_sfc(), "windTurbines", crs_str))
-  potentialWindTurbines <- to_sv(st_sfc(st_multipoint(rbind(c(800,800), c(850,250)))), "potentialWindTurbines", crs_str)
+  potentialWindTurbines <- to_sv(st_sfc(
+    st_point(c(8500,8500)), st_point(c(9000,2500)), st_point(c(2500,9000)), st_point(c(6000,6000))
+  ), "potentialWindTurbines", crs_str)
   
   # pipelines (+ roads)
   pipelines          <- suppressWarnings(to_sv(st_sfc(), "pipelines", crs_str))
-  potentialPipelines <- to_sv(st_sfc(st_point(c(200,850)), st_point(c(400,900))), "potentialPipelines", crs_str)
-  roads              <- to_sv(st_sfc(st_linestring(rbind(c(0,500), c(1000,500)))), "roads", crs_str)
+  potentialPipelines <- to_sv(st_sfc(st_point(c(2000,8500)), st_point(c(4000,9000))), "potentialPipelines", crs_str)
+  roads              <- to_sv(st_sfc(
+    st_linestring(rbind(c(0,5000), c(10000,5000))),
+    st_linestring(rbind(c(1000,1000), c(9000,9000)))
+  ), "roads", crs_str)
   
-  # mining (one existing pad + buffered potential)
-  mine_poly        <- st_polygon(list(rbind(c(500,100), c(500,200), c(600,200), c(600,100), c(500,100))))
-  mining           <- to_sv(st_sfc(mine_poly), "mining", crs_str)
-  potentialMining  <- to_sv(st_buffer(st_sfc(mine_poly), 150), "potentialMining", crs_str) # has Potential by to_sv()
+  # mining (existing pad ~80,000 m²) + buffered potential
+  mine_poly      <- st_polygon(list(rbind(c(500,100), c(900,100), c(900,300), c(500,300), c(500,100)))) # 400x200 m
+  mining         <- to_sv(st_sfc(mine_poly), "mining", crs_str)
+  potentialMining <- to_sv(st_buffer(st_sfc(mine_poly), 1500), "potentialMining", crs_str)
   
-  # forestry: small existing cutblock + two broad potential regions (Potential 1/2)
-  cb_poly   <- st_polygon(list(rbind(c(800,400), c(800,600), c(900,600), c(900,400), c(800,400))))
+  # forestry: existing ~20,000 m² + two broad potential regions (Potential 1/2)
+  cb_poly   <- st_polygon(list(rbind(c(8000,4000), c(8000,6000), c(9000,6000), c(9000,4000), c(8000,4000))))
   cutblocks <- to_sv(st_sfc(cb_poly), "cutblocks", crs_str)
   
-  pot_f1 <- st_polygon(list(rbind(c(0,0), c(0,1000), c(500,1000), c(500,0), c(0,0))))
-  pot_f2 <- st_polygon(list(rbind(c(500,0), c(500,1000), c(1000,1000), c(1000,0), c(500,0))))
+  pot_f1 <- st_polygon(list(rbind(c(   0,   0), c(   0,10000), c(5000,10000), c(5000,   0), c(   0,   0))))
+  pot_f2 <- st_polygon(list(rbind(c(5000,   0), c(5000,10000), c(10000,10000), c(10000,  0), c(5000,   0))))
   potentialCutblocks <- to_sv(st_sfc(pot_f1, pot_f2), "potentialCutblocks", crs_str)
   potentialCutblocks$Potential <- c(1L, 2L)
-  # avoid overlap with existing cutblock
-  potentialCutblocks <- erase(potentialCutblocks, cutblocks)
+  potentialCutblocks <- erase(potentialCutblocks, cutblocks) # avoid overlap
   
-  # oil & gas: one seismic line + polygonal potential (Potential 1/2)
-  seis_line <- st_linestring(rbind(c(300,500), c(300,1000)))
-  seismicLines <- to_sv(st_sfc(seis_line), "seismicLines", crs_str)
+  # oil & gas: several existing seismic lines + polygonal potentials (1/2)
+  seis_lines <- st_sfc(
+    st_linestring(rbind(c(3000,2000), c(3000,9500))),
+    st_linestring(rbind(c(7000,1500), c(7000,9000))),
+    st_linestring(rbind(c(1500,7000), c(8500,7000))) # cross line to vary angles
+  )
+  seismicLines <- to_sv(seis_lines, "seismicLines", crs_str)
   
-  pot_seis_poly1 <- st_polygon(list(rbind(c(200,600), c(200,1000), c(400,1000), c(400,600), c(200,600))))
-  pot_seis_poly2 <- st_polygon(list(rbind(c(100,450), c(100,650),  c(200,650),  c(200,450), c(100,450))))
+  pot_seis_poly1 <- st_polygon(list(rbind(c(2000,6000), c(2000,10000), c(4000,10000), c(4000,6000), c(2000,6000))))
+  pot_seis_poly2 <- st_polygon(list(rbind(c(1000,4500), c(1000,6500),  c(2000,6500),  c(2000,4500), c(1000,4500))))
   potentialSeismicLines <- to_sv(st_sfc(pot_seis_poly1, pot_seis_poly2), "potentialSeismicLines", crs_str)
-  potentialSeismicLines$Potential <- c(1L, 2L)
+  potentialSeismicLines$Potential <- c(1L, 2L) # polygons, as required
   
   list(
     settlements = list(settlements = settlements, potentialSettlements = potentialSettlements),
@@ -85,31 +91,29 @@ createDisturbanceList <- function(crs_str = "EPSG:3005") {
   )
 }
 
-#— 2) disturbanceParameters with realistic rates/sizes and correct wiring -----
-# Notes:
-# - For Generating rows: dataClass = potential layer, disturbanceOrigin = existing/current layer
-# - For Enlarging rows:  dataClass unused; set = origin for clarity
-# - Sizes chosen so they exceed minimal effective buffer widths and yield plausible lengths/areas.
+#— 2) disturbanceParameters (rates in PERCENT; sizes mostly inferred) ----------
+# NOTE: The module converts percent to fraction internally (Rate <- disturbanceRate/100),
+# so '2' means 2%, not 0.02. Keep this consistent across tests.
 createDisturbanceParameters <- function(distList, res = .DEFAULT_RESOLUTION) {
-  row_gen <- function(sector, origin, potential, rate, size_expr, interval = 1L) {
+  row_gen <- function(sector, origin, potential, rate_percent, size_expr = NA_character_, interval = 1L) {
     data.table(
       dataName            = sector,
-      dataClass           = potential,      # potential layer used for siting
+      dataClass           = potential,
       disturbanceType     = "Generating",
-      disturbanceRate     = rate,           # proportion of total STUDY AREA per time step (e.g., 0.02 = 2%)
-      disturbanceSize     = size_expr,      # string expression, evaluated later
-      disturbanceOrigin   = origin,         # existing/current layer (excluded when siting)
+      disturbanceRate     = rate_percent,   # percent, e.g., 0.2 = 0.2%
+      disturbanceSize     = size_expr,      # NA => let calculateSize() infer from 'origin'
+      disturbanceOrigin   = origin,
       disturbanceEnd      = "",
       disturbanceInterval = interval,
       resolutionVector    = res
     )
   }
-  row_enl <- function(sector, origin, rate, interval = 1L) {
+  row_enl <- function(sector, origin, rate_percent, interval = 1L) {
     data.table(
       dataName            = sector,
       dataClass           = origin,
       disturbanceType     = "Enlarging",
-      disturbanceRate     = rate,
+      disturbanceRate     = rate_percent,
       disturbanceSize     = NA_character_,
       disturbanceOrigin   = origin,
       disturbanceEnd      = "",
@@ -118,59 +122,56 @@ createDisturbanceParameters <- function(distList, res = .DEFAULT_RESOLUTION) {
     )
   }
   
-  # ---- Generating (plausible, buffer-safe sizes) ----
-  # Forestry cutblocks: ~10–30 ha; mean 20 ha (200,000 m²), sd 6 ha
-  # Mining pads: ~3–12 ha; mean 8 ha (80,000 m²), sd 2 ha
-  # Seismic (as area of buffered line): choose mean 30,000 m², sd 9,000 m²
-  # Wind turbines: keep module default pixel-sized pad (62,500 m²) when unknown
+  # ---- Generating ----
   gen_rows <- rbindlist(list(
-    row_gen("forestry", "cutblocks",      "potentialCutblocks",     0.020, "rtnorm(1, 200000, 60000,  lower=0)"),
-    row_gen("mining",   "mining",         "potentialMining",        0.005, "rtnorm(1,  80000, 20000,  lower=0)"),
-    row_gen("oilGas",   "seismicLines",   "potentialSeismicLines",  0.010, "rtnorm(1,  30000,  9000,  lower=0)"),
-    row_gen("wind",     "windTurbines",   "potentialWindTurbines",  0.001, "62500") # module default for turbines
+    # Forestry: target ~0.2% of 100 km² = 0.2 km² = 200,000 m² per step → ~10 x 20k m² blocks
+    row_gen("forestry", "cutblocks",      "potentialCutblocks",     0.2, NA_character_),
+    # Mining: ~0.1% = 100,000 m² per step → ~1 pad of ~80k m²
+    row_gen("mining",   "mining",         "potentialMining",        0.1, NA_character_),
+    # Seismic (area ~ of buffered lines sample): aim ~0.1% = 100,000 m²
+    row_gen("oilGas",   "seismicLines",   "potentialSeismicLines",  0.1, "rtnorm(1, 30000, 9000, lower=0)"),
+    # Wind: each turbine ~62,500 m² ⇒ 0.0625% of 100 km²; set 0.10% to allow ~1–2 turbines/step
+    row_gen("wind",     "windTurbines",   "potentialWindTurbines",  0.10, "62500")
   ))
   
-  # ---- Enlarging ----
-  # Settlements: gentle growth (0.5% of existing buffered area per step)
+  # ---- Enlarging (settlements only; removed odd 'pipelines enlarging roads') ----
   enl_rows <- rbindlist(list(
-    row_enl("settlements", "settlements", 0.005),
-    row_enl("pipelines",   "roads",       0.000) 
+    row_enl("settlements", "settlements", 0.5)  # 0.5% growth on (buffered) existing area
   ))
   
   rbindlist(list(gen_rows, enl_rows), fill = TRUE)
 }
 
-#— 3) updatedLayersAll that actually hits multiple branches --------------------
+#— 3) updatedLayersAll that hits different branches ----------------------------
 createUpdatedLayersAll <- function() {
-  # Enlarging vectors
   new_settlement_vect <- vect(st_sfc(st_polygon(list(rbind(
-    c( 80,  80), c( 80, 200), c(200, 200), c(200,  80), c( 80,  80)
+    c(1000,1000), c(1000,2200), c(2200,2200), c(2200,1000), c(1000,1000)
   ))))); crs(new_settlement_vect) <- crs(r)
   
-  new_wind_vect <- vect(st_sfc(st_point(c(850, 850)))); crs(new_wind_vect) <- crs(r)
+  new_wind_vect <- vect(st_sfc(st_point(c(9000, 9000)))); crs(new_wind_vect) <- crs(r)
   
   new_dummy_vect <- vect(st_sfc(st_point(c(0, 0)))); crs(new_dummy_vect) <- crs(r)
   
   # A Raster for mining to force raster→vector conversion path
-  new_mining_raster <- rast(nrows = 5, ncols = 5, xmin = 500, xmax = 600, ymin = 100, ymax = 200, vals = 1)
+  new_mining_raster <- rast(nrows = 10, ncols = 10, xmin = 500, xmax = 900, ymin = 100, ymax = 300, vals = 1)
   crs(new_mining_raster) <- crs(r)
   
   # Different-geometry SpatVector for forestry (linestring)
-  new_forestry_line <- vect(st_sfc(st_linestring(rbind(c(800, 500), c(900, 500)))))
+  new_forestry_line <- vect(st_sfc(st_linestring(rbind(c(8000, 5000), c(9000, 5000)))))
   crs(new_forestry_line) <- crs(r)
   
   # Seismic lines + first year
-  new_seis_vect <- vect(st_sfc(st_linestring(rbind(c(300, 600), c(300, 900)))))
+  new_seis_vect <- vect(st_sfc(st_linestring(rbind(c(3000, 6500), c(3000, 9000)))))
   crs(new_seis_vect) <- crs(r)
   
-  first_year_seis <- vect(st_sfc(st_linestring(rbind(c(250, 500), c(250, 800)))))
+  first_year_seis <- vect(st_sfc(st_linestring(rbind(c(2500, 5000), c(2500, 8000)))))
   crs(first_year_seis) <- crs(r)
   
   list(
     individualLayers  = list(
       settlements = list(settlements = new_settlement_vect),
       wind        = list(windTurbines = new_wind_vect),
-      pipelines   = list(), # no updates → tests “no updates” path
+      pipelines   = list(), # no updates → “no updates” path
       mining      = list(mining = new_mining_raster),
       forestry    = list(cutblocks = new_forestry_line),
       oilGas      = list(seismicLines = new_seis_vect),
@@ -206,5 +207,10 @@ check_fixtures <- function(distList, dpar) {
     stop("resolutionVector must be a single numeric value")
   if (any(is.na(dpar[disturbanceType %in% c("Generating","Enlarging"), disturbanceRate])))
     stop("Provide non-NA disturbanceRate for Generating/Enlarging")
+  
+  # Rates should be expressed in PERCENT because module divides by 100
+  if (any(dpar$disturbanceRate > 100 | dpar$disturbanceRate < 0))
+    stop("disturbanceRate must be in [0, 100] percent")
+  
   invisible(TRUE)
 }
