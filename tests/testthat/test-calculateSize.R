@@ -61,6 +61,18 @@ test_that("calculateSize converts raster inputs correctly", {
 # Remaining tests (unchanged)
 test_that("calculateSize computes disturbanceSize correctly for polygon inputs", {
   disturbanceParameters[dataClass == "potentialSettlements", disturbanceSize := NA]
+  add <- data.table(
+    dataName            = "settlements",
+    dataClass           = "potentialSettlements",  # polygon potential
+    disturbanceType     = "Generating",
+    disturbanceRate     = 0.003,                   # 0.3%/yr — arbitrary but plausible
+    disturbanceSize     = NA_character_,           # let calculateSize fill this
+    disturbanceOrigin   = "settlements",           # size computed from existing polygon(s)
+    disturbanceEnd      = "",
+    disturbanceInterval = 1L,
+    resolutionVector    = .DEFAULT_RESOLUTION
+  )
+  disturbanceParameters <- rbind(disturbanceParameters, add, fill = TRUE)
   updatedParams <- calculateSize(disturbanceParameters,
                                  disturbanceList,
                                  whichToUpdate = which(disturbanceParameters$dataClass == "potentialSettlements"))
@@ -134,4 +146,10 @@ test_that("calculateSize handles zero-variance inputs with positive sigma", {
   val <- eval(parse(text = s))
   expect_true(is.numeric(val) && length(val) == 1L && is.finite(val) && val >= 0)
 })
+
+test_that("calculateSize is a no-op when whichToUpdate is empty", {
+  out <- calculateSize(disturbanceParameters, disturbanceList, whichToUpdate = integer(0))
+  expect_identical(out, disturbanceParameters)
+})
+
 

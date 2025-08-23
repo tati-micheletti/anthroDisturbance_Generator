@@ -2,6 +2,9 @@ calculateSize <- function(disturbanceParameters,
                           disturbanceList,
                           whichToUpdate){
   dP <- disturbanceParameters[whichToUpdate, ]
+  if (length(whichToUpdate) == 0L || NROW(dP) == 0L)
+    return(disturbanceParameters)
+  
   updatedDisturbanceParameters <- rbindlist(lapply(1:NROW(dP), function(INDEX){
     # Get the row to be calculated
     sub <- dP[INDEX, ]
