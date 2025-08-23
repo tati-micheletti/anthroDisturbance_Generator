@@ -106,30 +106,31 @@ test_that("raster + raster merging yields SpatVector", {
 
 test_that("Enlarging with non-empty disturbanceEnd merges rather than replaces (pipelines$roads)", {
   # Create a small new roads layer
-  new_roads <- vect(
-    st_sfc(st_linestring(rbind(c(1,5), c(2,5))), crs = crs(r))
+  new_roads <- terra::vect(
+    sf::st_sfc(sf::st_linestring(rbind(c(1,5), c(2,5))), crs = terra::crs(r))
   )
   upd3 <- updAll
   upd3$individualLayers$pipelines <- list(roads = new_roads)
   
-  # Modify parameters so 'roads' is marked Enlarging *but* disturbanceEnd != ""
-  distParam3 <- copy(distParam)
+  # Modify parameters so 'roads' is flagged Enlarging but with non-empty disturbanceEnd
+  distParam3 <- data.table::copy(distParam)
   distParam3[
     dataName == "pipelines" & disturbanceOrigin == "roads",
-    `:=`(disturbanceType="Enlarging", disturbanceEnd="roads")
+    `:=`(disturbanceType = "Enlarging", disturbanceEnd = "roads")  # non-empty end ⇒ merge path
   ]
   
   out4 <- replaceListFast(
     disturbanceList       = distList,
     updatedLayersAll      = upd3,
-    currentTime           = 42,
+    currentTime           = 42L,
     disturbanceParameters = distParam3
   )
-  merged_roads <- out4$pipelines[["roads"]]
   
+  merged_roads <- out4$pipelines[["roads"]]
   expect_s4_class(merged_roads, "SpatVector")
-  # original had 1 feature, new 1 feature → should see 2
-  expect_equal(nrow(merged_roads), 2)
+  
+  # baseline has 2 road features in the fixtures; adding 1 new ⇒ 3 total
+  expect_equal(nrow(merged_roads), nrow(distList$pipelines$roads) + nrow(new_roads))
 })
 
 test_that("merged mining vector has a 'Class' column set to the layer name", {
@@ -226,10 +227,10 @@ test_that("unsupported class combination throws a clear error for a non-Enlargin
 
 test_that("multi-layer updates with mixed types in pipelines sector", {
   # prepare new pipelines and roads updates
-  new_pipe <- vect(st_sfc(st_point(c(2,2))))
-  crs(new_pipe) <- crs(r)
-  new_roads <- vect(st_sfc(st_linestring(rbind(c(1,5), c(2,5)))))
-  crs(new_roads) <- crs(r)
+  new_pipe  <- terra::vect(sf::st_sfc(sf::st_point(c(2,2))))
+  terra::crs(new_pipe) <- terra::crs(r)
+  new_roads <- terra::vect(sf::st_sfc(sf::st_linestring(rbind(c(1,5), c(2,5)))))
+  terra::crs(new_roads) <- terra::crs(r)
   
   upd2 <- updAll
   upd2$individualLayers$pipelines <- list(
@@ -237,27 +238,42 @@ test_that("multi-layer updates with mixed types in pipelines sector", {
     roads     = new_roads
   )
   
-  distParam2 <- copy(distParam)
-  # make roads Enlarging (replace) and leave pipelines Generating (merge)
-  distParam2[
-    dataName == "pipelines" & disturbanceOrigin == "roads",
-    `:=`(disturbanceType = "Enlarging", disturbanceEnd = "")
-  ]
+  distParam2 <- data.table::copy(distParam)
   
-  out2 <- replaceListFast(distList, upd2, currentTime = 42, disturbanceParameters = distParam2)
+  # Add a real row for pipelines/roads as Enlarging with empty disturbanceEnd ⇒ replace
+  distParam2 <- data.table::rbindlist(list(
+    distParam2,
+    data.table::data.table(
+      dataName            = "pipelines",
+      dataClass           = "roads",
+      disturbanceType     = "Enlarging",
+      disturbanceRate     = 0.1,                 # any valid percent
+      disturbanceSize     = NA_character_,
+      disturbanceOrigin   = "roads",
+      disturbanceEnd      = "",                  # empty ⇒ replacement branch
+      disturbanceInterval = 1L,
+      resolutionVector    = .DEFAULT_RESOLUTION
+    )
+  ), fill = TRUE)
+  
+  out2 <- replaceListFast(
+    disturbanceList       = distList,
+    updatedLayersAll      = upd2,
+    currentTime           = 42L,
+    disturbanceParameters = distParam2
+  )
   
   # both updated layers should appear
   expect_true(all(c("pipelines", "roads") %in% names(out2$pipelines)))
   
-  # pipelines (Generating) merges: empty past + new = 1 feature
+  # pipelines (Generating/merge): empty past + new ⇒ 1 feature
   expect_s4_class(out2$pipelines$pipelines, "SpatVector")
   expect_equal(nrow(out2$pipelines$pipelines), 1)
   
-  # roads (Enlarging & disturbanceEnd == "") replaces: only new feature
+  # roads (Enlarging & disturbanceEnd == "") ⇒ replace: only the new feature(s)
   expect_s4_class(out2$pipelines$roads, "SpatVector")
-  expect_equal(nrow(out2$pipelines$roads), 1)
+  expect_equal(nrow(out2$pipelines$roads), nrow(new_roads))  # = 1
 })
-
 
 test_that("Enlarging with disturbanceEnd != '' merges rather than replaces for settlements", {
   new_set <- vect(st_sfc(st_polygon(list(rbind(
