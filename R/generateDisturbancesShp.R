@@ -1479,13 +1479,9 @@ generateDisturbancesShp <- function(disturbanceParameters,
   }
   
   ### RETURN!
-  if (firstTime){
-    seismicLinesFirstYear <- vect(file.path(outputsFolder, 
-                                            paste0("seismicLinesYear", 
-                                                   currentTime, 
-                                                   "_",
-                                                   studyAreaHash,
-                                                   ".shp")))
+  if (firstTime) {
+    f <- file.path(outputsFolder, paste0("seismicLinesYear", currentTime, "_", studyAreaHash, ".shp"))
+    seismicLinesFirstYear <- if (file.exists(f)) terra::vect(f) else NULL
   } else {
     seismicLinesFirstYear <- NULL
   }
