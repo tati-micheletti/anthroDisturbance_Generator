@@ -619,15 +619,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
               cropLayFinal   <- out_createCropLay$lines
               potLayTopValid <- out_createCropLay$availableArea
               
-              suppressWarnings(
-                terra::writeVector(
-                  x         = cropLayFinal,
-                  filename  = file.path(
-                    outputsFolder,
-                    paste0("seismicLinesYear", currentTime, "_", studyAreaHash, ".shp")
-                  ), overwrite = TRUE
-                )
-              )
+              if (inherits(cropLayFinal, "SpatVector") && nrow(cropLayFinal) > 0) {
+                suppressWarnings(terra::writeVector(
+                  cropLayFinal,
+                  file.path(outputsFolder, paste0("seismicLinesYear", currentTime, "_", studyAreaHash, ".shp")),
+                  overwrite = TRUE
+                ))
+              } else {
+                warning("First-year seismic clustering produced no lines; skipping shapefile write.")
+              }
             } else {
               # reuse last year's clustered lines (with Pot_Clus)
               if (
