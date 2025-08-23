@@ -5,13 +5,6 @@ library(data.table)
 library(tictoc)
 library(dplyr)
 
-# Disable reproducible caching for speed
-#options(reproducible.useCache = FALSE)
-#assignInNamespace("Cache",
-#                  function(fun, ...) fun(...),
-#                  ns = "reproducible"
-#)
-
 # Helper to disable caching between tests
 reset_cache <- function() {
   options(reproducible.cachePath = tempfile())
@@ -291,17 +284,8 @@ test_that("Erase carves out a 50m buffer from the potential polygon", {
   expect_false(any(terra::relate(area, buf, relation = "T********", pairs = FALSE)))
 })
 
-
-########################
-# new tests
-
 test_that("splits lines at potential boundaries and propagates Potential", {
   skip_on_cran()
-  requireNamespace("terra")
-  requireNamespace("data.table")
-  
-  library(terra)
-  library(data.table)
   
   # Provide no-op tic/toc if tictoc isn't attached
   if (!exists("tic", mode = "function"))  assign("tic", function(...) invisible(NULL), envir = .GlobalEnv)
@@ -357,8 +341,7 @@ test_that("splits lines at potential boundaries and propagates Potential", {
 
 test_that("no lines within potential returns empty lines and unchanged availableArea", {
   skip_on_cran()
-  library(terra)
-  
+
   mk_sq <- function(x0, y0, size = 50, crs = "EPSG:3857") {
     vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
                 ncol = 2, byrow = TRUE), type = "polygons", crs = crs)
@@ -401,7 +384,6 @@ test_that("no lines within potential returns empty lines and unchanged available
 
 test_that("availableArea keeps 'polygons' geomtype even when empty", {
   skip_on_cran()
-  library(terra)
   
   # Tiny potential polygon fully erased by 50m buffer around the line
   pot <- vect(matrix(c(0,0, 50,0, 50,50, 0,50, 0,0), ncol=2, byrow=TRUE),
@@ -419,8 +401,7 @@ test_that("availableArea keeps 'polygons' geomtype even when empty", {
 
 test_that("createCropLayFinalYear1: deduplicates Potential* columns to a single 'Potential'", {
   skip_on_cran()
-  library(terra)
-  
+
   mk_sq <- function(x0, y0, size = 50, crs = "EPSG:3857") {
     vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
                 ncol = 2, byrow = TRUE), type = "polygons", crs = crs)
@@ -451,7 +432,6 @@ test_that("createCropLayFinalYear1: deduplicates Potential* columns to a single 
 
 test_that("createCropLayFinalYear1: availableArea equals potLayTopValid minus 50 m buffered lines", {
   skip_on_cran()
-  library(terra)
   
   mk_sq <- function(x0, y0, size = 80, crs = "EPSG:3857") {
     vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
