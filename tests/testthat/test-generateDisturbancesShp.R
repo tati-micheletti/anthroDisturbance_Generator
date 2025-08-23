@@ -373,7 +373,6 @@ test_that("Generating branch returns NULL for empty potential", {
 #13) 
 #---- Test for Generating (Polygon Area Bounds) ----
 test_that("Generating creates some disturbance but not more than intended (module-standard params)", {
-  # --- shared raster / study area (100 m x 100 m; meters CRS) ---
   r  <- rast(nrows = 100, ncols = 100, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, vals = 1)
   crs(r) <- "EPSG:3005"
   sa <- as.polygons(ext(r))
@@ -381,10 +380,11 @@ test_that("Generating creates some disturbance but not more than intended (modul
   
   distList <- createDisturbanceList(crs(r))
   
-  existing_cutblocks <- distList$forestry$cutblocks
-  existing_area <- if (nrow(existing_cutblocks) > 0) {
-    sum(terra::expanse(existing_cutblocks, unit = "m"))
-  } else 0
+  existing_cutblocks <- st_polygon(list(rbind(c(80,40), c(80,60), c(90,60), c(90,40), c(80,40))))
+  existing_cutblocks <- st_sfc(existing_cutblocks, crs = "EPSG:3005")
+  existing_cutblocks <- vect(existing_cutblocks)
+  
+  existing_area <- sum(terra::expanse(existing_cutblocks, unit = "m"))
   
   # disturbance parameters: proportion of area
   dp_generating <- data.table(
@@ -433,8 +433,11 @@ test_that("Generating creates some disturbance but not more than intended (modul
   
   # fetch output and compute only the newly generated area
   out_poly <- out_gen$individualLayers$forestry$cutblocks
+  
   plot(sa)
-  plot(existing_cutblocks, add=TRUE)
+  plot(existing_cutblocks
+       , add=TRUE
+       )
   plot(out_poly, add=TRUE)
   
   expect_true(inherits(out_poly, "SpatVector"))
