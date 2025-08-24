@@ -88,7 +88,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
         if (!disturbanceRateRelatesToBufferedArea){
           if (originalForm %in% c("lines", "points")){
             # Check if we have the resolution
-            if ("resolutionVector" %in% dPar){
+            if ("resolutionVector" %in% names(dPar)){
               if (originalForm == "lines")
                 RES <- dParOri[["resolutionVector"]]
               if (isTRUE(originalForm == "points")) RES <- RES/2
@@ -618,6 +618,10 @@ generateDisturbancesShp <- function(disturbanceParameters,
               )
               cropLayFinal   <- out_createCropLay$lines
               potLayTopValid <- out_createCropLay$availableArea
+              if (!inherits(potLayTopValid, "SpatVector") || nrow(potLayTopValid) == 0L) {
+                potLayTopValid <- potLay
+              }
+              finalPotLay <- potLayTopValid
               
               if (inherits(cropLayFinal, "SpatVector") && nrow(cropLayFinal) > 0) {
                 suppressWarnings(terra::writeVector(

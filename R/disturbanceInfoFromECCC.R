@@ -269,6 +269,7 @@ disturbanceInfoFromECCC <- function(studyArea,
   
   AD_changed <- dcast(data = AD_change, formula = Class ~ Year, value.var = "totalArea_sqKm")
   AD_changed[is.na(yearOLD), yearOLD := 0]
+  AD_changed[is.na(yearNEW), yearNEW := 0] 
   
   AD_changed[, disturbProportionInAreaOLD := yearOLD/totalstudyAreaVAreaSqKm]
   AD_changed[, disturbProportionInAreaNEW := yearNEW/totalstudyAreaVAreaSqKm]
