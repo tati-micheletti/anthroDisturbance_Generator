@@ -1,10 +1,3 @@
-library(testthat)
-library(terra)
-library(reproducible)
-library(data.table)
-library(tictoc)
-library(dplyr)
-
 # Helper to disable caching between tests
 reset_cache <- function() {
   options(reproducible.cachePath = tempfile())

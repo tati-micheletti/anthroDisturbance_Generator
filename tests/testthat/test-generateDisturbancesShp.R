@@ -1,16 +1,3 @@
-library(testthat)
-library(terra)
-library(sf)
-library(data.table)
-library(reproducible)
-library(tictoc)
-library(digest)
-library(mockery)
-library(Require)
-
-################################################################################
-### ------------------------------------------------------------------------ ###
-################################################################################
 # Setup
 
 # dummy Paths to satisfy internal references
@@ -1553,6 +1540,7 @@ test_that("Cluster seeds have Pot_Clus on first year and Subsequent-year reuse p
   
   # Validate second run
   vec2 <- out2$individualLayers$seismic$seismicLines
+  plot(vec2)
   expect_s4_class(vec2, "SpatVector")
   expect_equal(terra::geomtype(vec2), "lines")
   df2 <- terra::values(vec2)
@@ -1855,3 +1843,283 @@ testthat::test_that("CRS/grid mismatch in featuresToAvoid raises an error (curre
   )
 })
 
+
+### additional tests for upping coverage
+test_that("Generating: computes current buffered area when relating rate to 500 m buffer", {
+  testthat::skip_if_not_installed("terra")
+  testthat::skip_if_not_installed("sf")
+  
+  r  <- terra::rast(nrows = 60, ncols = 60, xmin = 0, xmax = 600, ymin = 0, ymax = 600, vals = 1)
+  terra::crs(r) <- "EPSG:3005"
+  sa <- terra::as.polygons(terra::ext(r)); terra::crs(sa) <- terra::crs(r)
+  Paths <<- list(outputPath = tempdir(), inputPath = tempdir())
+  
+  # Potential polygons with a numeric Potential column
+  pot <- terra::vect("POLYGON ((50 50, 50 550, 550 550, 550 50, 50 50))"); terra::crs(pot) <- terra::crs(r)
+  pot$Potential <- 10L
+  
+  # Some current lines (Lay) inside the potential
+  lay <- terra::vect("LINESTRING (100 300, 500 300)"); terra::crs(lay) <- terra::crs(r); lay$Class <- "pipelines"
+  
+  dList <- list(energy = list(pipelines = lay, potentialPipelines = pot))
+  
+  dp <- data.table::data.table(
+    disturbanceType     = "Generating",
+    dataName            = "energy",
+    disturbanceOrigin   = "pipelines",
+    dataClass           = "potentialPipelines",
+    disturbanceRate     = 0.2,     # small but > 0 to run the branch
+    disturbanceInterval = 1,
+    potentialField      = "Potential",
+    disturbanceSize     = "1000"   # m², not really used here
+  )
+  
+  # Expect the "Buffered (500m) area..." message to be printed from the branch
+  expect_message(
+    suppressWarnings(
+      generateDisturbancesShp(
+        disturbanceParameters = dp,
+        disturbanceList = dList,
+        rasterToMatch = r, studyArea = sa, fires = NULL,
+        currentTime = 1, firstTime = FALSE,
+        growthStepGenerating = 1, growthStepEnlargingPolys = 1, growthStepEnlargingLines = 1,
+        currentDisturbanceLayer = NULL,
+        connectingBlockSize = NULL,
+        disturbanceRateRelatesToBufferedArea = TRUE,   # <— triggers branch
+        outputsFolder = tempdir(),
+        seismicLineGrids = 1,
+        checkDisturbancesForBuffer = FALSE,
+        runName = "t-gen-buff",
+        useRoadsPackage = FALSE,
+        siteSelectionAsDistributing = character(),
+        probabilityDisturbance = NULL,
+        maskWaterAndMountainsFromLines = FALSE,
+        featuresToAvoid = NULL,
+        altitudeCut = 0,
+        clusterDistance = 0,
+        distanceNewLinesFactor = 0,
+        runClusteringInParallel = FALSE,
+        useClusterMethod = TRUE,
+        refinedStructure = FALSE
+      )
+    ),
+    "Buffered \\(500m\\) area for energy -- pipelines:",
+    fixed = FALSE
+  ) # covers the message path. :contentReference[oaicite:3]{index=3}
+})
+
+
+test_that("Generating: probabilityDisturbance is computed when NULL for distributing origins", {
+  testthat::skip_if_not_installed("terra")
+  testthat::skip_if_not_installed("sf")
+  
+  r  <- terra::rast(nrows = 60, ncols = 60, xmin = 0, xmax = 600, ymin = 0, ymax = 600, vals = 1)
+  terra::crs(r) <- "EPSG:3005"
+  sa <- terra::as.polygons(terra::ext(r)); terra::crs(sa) <- terra::crs(r)
+  Paths <<- list(outputPath = tempdir(), inputPath = tempdir())
+  
+  # Two potential polygons with different Potential values
+  potA <- terra::vect("POLYGON ((50 50, 50 300, 300 300, 300 50, 50 50))");  terra::crs(potA) <- terra::crs(r); potA$Potential <- 5L
+  potB <- terra::vect("POLYGON ((300 300, 300 550, 550 550, 550 300, 300 300))"); terra::crs(potB) <- terra::crs(r); potB$Potential <- 10L
+  pot  <- rbind(potA, potB)
+  
+  # Existing seismic lines (Lay) overlapping both potentials
+  lay  <- terra::vect("LINESTRING (60 60, 290 290)"); terra::crs(lay) <- terra::crs(r); lay$Class <- "seismicLines"
+  
+  dList <- list(mining = list(seismicLines = lay, potentialSeismic = pot))
+  
+  dp <- data.table::data.table(
+    disturbanceType     = "Generating",
+    dataName            = "mining",
+    disturbanceOrigin   = "seismicLines",
+    dataClass           = "potentialSeismic",
+    disturbanceRate     = 0.05,
+    disturbanceInterval = 1,
+    potentialField      = "Potential",
+    disturbanceSize     = "1000"
+  )
+  
+  expect_message(
+    suppressWarnings(
+      generateDisturbancesShp(
+        disturbanceParameters = dp,
+        disturbanceList = dList,
+        rasterToMatch = r, studyArea = sa, fires = NULL,
+        currentTime = 1, firstTime = TRUE,          # → createCropLayFinalYear1 path
+        growthStepGenerating = 1, growthStepEnlargingPolys = 1, growthStepEnlargingLines = 1,
+        currentDisturbanceLayer = NULL,
+        connectingBlockSize = NULL,
+        disturbanceRateRelatesToBufferedArea = FALSE,
+        outputsFolder = tempdir(),
+        seismicLineGrids = 1,
+        checkDisturbancesForBuffer = FALSE,
+        runName = "t-prob-auto",
+        useRoadsPackage = FALSE,
+        siteSelectionAsDistributing = "seismicLines",    # <— triggers branch
+        probabilityDisturbance = NULL,                   # <— auto compute
+        maskWaterAndMountainsFromLines = FALSE,
+        featuresToAvoid = NULL,
+        altitudeCut = 0,
+        clusterDistance = 1000,
+        distanceNewLinesFactor = 1,
+        runClusteringInParallel = FALSE,
+        useClusterMethod = TRUE,                         # avoids the grid/rtnorm path
+        refinedStructure = FALSE
+      )
+    ),
+    "probabilityDisturbance for seismicLines is NULL\\. Calculating from data\\.",
+    fixed = FALSE
+  ) # branch + message. :contentReference[oaicite:5]{index=5}
+})
+
+test_that("Generating: tiny size vs 500 m buffered point → fallback semantics are honored", {
+  testthat::skip_if_not_installed("terra")
+  testthat::skip_if_not_installed("sf")
+  testthat::skip_if_not_installed("SpaDES.tools")
+  
+  r  <- terra::rast(nrows = 60, ncols = 60, xmin = 0, xmax = 600, ymin = 0, ymax = 600, vals = 1)
+  terra::crs(r) <- "EPSG:3005"
+  sa <- terra::as.polygons(terra::ext(r)); terra::crs(sa) <- terra::crs(r)
+  Paths <<- list(outputPath = tempdir(), inputPath = tempdir())
+  
+  pot <- terra::vect("POLYGON ((50 50, 50 550, 550 550, 550 50, 50 50))"); terra::crs(pot) <- terra::crs(r)
+  pot$Potential <- 1L
+  lay <- terra::vect("POLYGON ((100 100, 100 150, 150 150, 150 100, 100 100))"); terra::crs(lay) <- terra::crs(r)
+  dList <- list(industry = list(mining = lay, potentialMining = pot))
+  
+  dp <- data.table::data.table(
+    disturbanceType     = "Generating",
+    dataName            = "industry",
+    disturbanceOrigin   = "mining",
+    dataClass           = "potentialMining",
+    disturbanceRate     = 0.01,     # 0.01% of the study area
+    disturbanceInterval = 1,
+    potentialField      = "Potential",
+    disturbanceSize     = "200"     # m^2 — forces fallback
+  )
+  
+  out <- suppressWarnings(
+    generateDisturbancesShp(
+      disturbanceParameters = dp,
+      disturbanceList = dList,
+      rasterToMatch = r, studyArea = sa, fires = NULL,
+      currentTime = 1, firstTime = FALSE,
+      growthStepGenerating = 1, growthStepEnlargingPolys = 1, growthStepEnlargingLines = 1,
+      currentDisturbanceLayer = NULL,
+      connectingBlockSize = NULL,
+      disturbanceRateRelatesToBufferedArea = TRUE,
+      outputsFolder = tempdir(),
+      seismicLineGrids = 1,
+      checkDisturbancesForBuffer = FALSE,
+      runName = "t-minbuff-fallback",
+      useRoadsPackage = FALSE,
+      siteSelectionAsDistributing = character(),
+      probabilityDisturbance = NULL,
+      maskWaterAndMountainsFromLines = FALSE,
+      featuresToAvoid = NULL,
+      altitudeCut = 0,
+      clusterDistance = 0,
+      distanceNewLinesFactor = 0,
+      runClusteringInParallel = FALSE,
+      useClusterMethod = TRUE,
+      refinedStructure = FALSE
+    )
+  )
+  
+  # The generated layer is stored under individualLayers
+  gen <- out$individualLayers$industry$mining
+  testthat::expect_s4_class(gen, "SpatVector")           # SpatVector is S4, not S3
+  testthat::expect_identical(terra::geomtype(gen), "polygons")  # minimal buffer polygon
+  
+  # Fallback semantics: when re-buffered by 500 m, area ≈ π·500^2 per feature
+  A_expected <- pi * 500^2
+  A_buf <- sum(terra::expanse(terra::buffer(gen, width = 500), unit = "m", transform = FALSE))
+  testthat::expect_lt(abs(A_buf - A_expected), 0.05 * A_expected)  # within 5%
+  
+  # And the unbuffered geometry should be essentially area-less (because of the tiny buffer)
+  A_raw <- sum(terra::expanse(gen, unit = "m", transform = FALSE))
+  testthat::expect_lt(A_raw, 1)  # < 1 m^2
+})
+
+test_that("Connecting: featuresToAvoid is built from geodata (mocked)", {
+  testthat::skip_if_not_installed("terra")
+  testthat::skip_if_not_installed("mockery")
+  
+  r  <- terra::rast(nrows = 20, ncols = 20, xmin = 0, xmax = 200, ymin = 0, ymax = 200, vals = 1)
+  terra::crs(r) <- "EPSG:3005"
+  sa <- terra::as.polygons(terra::ext(r)); terra::crs(sa) <- terra::crs(r)
+  Paths <<- list(outputPath = tempdir(), inputPath = tempdir())
+  
+  # minimal potential + a road to connect to
+  pot  <- terra::vect("POLYGON ((30 30, 30 70, 70 70, 70 30, 30 30))", crs = terra::crs(r))
+  pot$Potential <- 1L; pot$ORIGIN <- 1900L
+  road <- terra::vect("LINESTRING (0 0, 200 200)", crs = terra::crs(r)); road$Class <- "roads"
+  
+  dList <- list(mining = list(
+    potentialMining = pot,
+    roads = road
+  ))
+  
+  dp <- data.table::rbindlist(list(
+    # Seed at least one origin to connect FROM
+    data.table::data.table(
+      disturbanceType     = "Generating",
+      dataName            = "mining",
+      disturbanceOrigin   = "mining",
+      dataClass           = "potentialMining",
+      disturbanceRate     = 0.001,
+      disturbanceInterval = 1L,
+      disturbanceSize     = "100",
+      resolutionVector    = list(15)
+    ),
+    # And the Connecting instruction (use 'disturbanceEnd', not 'endLayer')
+    data.table::data.table(
+      disturbanceType     = "Connecting",
+      dataName            = "mining",
+      disturbanceOrigin   = "mining",
+      disturbanceEnd      = "roads",
+      resolutionVector    = list(15)
+    )
+  ), fill = TRUE)
+  
+  # stubs – let our mocked rasters actually flow through postProcessTo
+  mock_elev <- function(country, path) terra::setValues(terra::rast(r), 1000)  # > altitudeCut
+  mock_lcov <- function(type,    path) terra::setValues(terra::rast(r), 0)
+  mock_pp   <- function(from, to, ...) from
+  
+  mockery::stub(generateDisturbancesShp, "elevation_30s", mock_elev)
+  mockery::stub(generateDisturbancesShp, "landcover",     mock_lcov)
+  mockery::stub(generateDisturbancesShp, "postProcessTo", mock_pp)
+  
+  # The generator is chatty (message()), so assert "no error" rather than "silent"
+  expect_error(
+    suppressMessages(suppressWarnings(
+      generateDisturbancesShp(
+        disturbanceParameters = dp,
+        disturbanceList = dList,
+        rasterToMatch = r, studyArea = sa, fires = NULL,
+        currentTime = 1, firstTime = FALSE,
+        growthStepGenerating = 1, growthStepEnlargingPolys = 1, growthStepEnlargingLines = 1,
+        currentDisturbanceLayer = NULL,
+        connectingBlockSize = 100,
+        disturbanceRateRelatesToBufferedArea = FALSE,
+        outputsFolder = tempdir(),
+        seismicLineGrids = 1,
+        checkDisturbancesForBuffer = FALSE,
+        runName = "t-connect-mask",
+        useRoadsPackage = FALSE,
+        siteSelectionAsDistributing = character(),
+        probabilityDisturbance = NULL,
+        maskWaterAndMountainsFromLines = TRUE,   # forces geodata path
+        featuresToAvoid = NULL,                  # so our stubs are used
+        altitudeCut = 500,
+        clusterDistance = 0,
+        distanceNewLinesFactor = 0,
+        runClusteringInParallel = FALSE,
+        useClusterMethod = TRUE,
+        refinedStructure = FALSE
+      )
+    )),
+    NA
+  )
+})

@@ -1,10 +1,4 @@
 # Unit tests for clusterLines() using testthat
-
-library(testthat)
-library(terra)
-library(doParallel)
-library(foreach)
-
 # 1. Test that clustering with a very large distThreshold assigns all lines to a single cluster
 
 # Create a simple SpatVector of two distant lines

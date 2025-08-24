@@ -1,19 +1,4 @@
 # test-createBufferedDisturbances.R
-
-testthat::test_that("setup: required packages are available", {
-  testthat::skip_if_not_installed("terra")
-  testthat::skip_if_not_installed("raster")
-  testthat::skip_if_not_installed("sf")
-  testthat::skip_if_not_installed("fasterize")
-})
-
-suppressPackageStartupMessages({
-  library(testthat)
-  library(terra)
-  library(raster)
-  library(sf)
-})
-
 # --- helpers ---------------------------------------------------------------
 
 make_template <- function(n = 100L, res_m = 10, crs_str = "EPSG:3005") {

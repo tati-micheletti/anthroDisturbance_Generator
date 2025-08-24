@@ -1,11 +1,4 @@
 # test-disturbanceInfoFromECCC_spec.R
-
-library(testthat)
-library(terra)
-library(data.table)
-library(mockery)
-library(digest)
-
 ## ---- Minimal reproducible spatial scaffolding --------------------------------
 
 # Study area + RTM with consistent CRS (meters; arbitrary but consistent)
@@ -456,3 +449,60 @@ test_that("RTM is optional (NULL) and function still returns a result", {
   )
   expect_true(is.list(res) && "proportionTable" %in% names(res))
 })
+
+### additional tests to up coverage
+
+# tests/testthat/test-disturbanceInfoFromECCC.R
+test_that("adds zero rows for classes missing on either side", {
+  # --- minimal spatial scaffolding ---
+  crs_str <- "EPSG:3857"
+  rtm <- rast(ext(0, 1e4, 0, 1e4), res = 1000, crs = crs_str); values(rtm) <- 1
+  sa  <- as.polygons(ext(0, 1e4, 0, 1e4), crs = crs_str)
+  
+  make_poly <- function(x1, y1, x2, y2, cls) {
+    v <- as.polygons(ext(x1, x2, y1, y2), crs = crs_str); v$Class <- cls; v
+  }
+  
+  # NEW has Road + Mine; OLD has Road + Cutblock → class sets differ both ways
+  AD_NEW_Lines <- rbind(make_poly(100,100,200,200,"Road"),
+                        make_poly(300,300,400,400,"Mine"))
+  AD_NEW_Polys <- AD_NEW_Lines[0]
+  AD_OLD_Lines <- rbind(make_poly(100,100,200,200,"Road"),
+                        make_poly(500,500,600,600,"Cutblock"))
+  AD_OLD_Polys <- AD_OLD_Lines[0]
+  
+  # fake prepInputs: return the 4 objects in order; keep cycling if called more
+  seq_data <- list(AD_NEW_Lines, AD_NEW_Polys, AD_OLD_Lines, AD_OLD_Polys)
+  i <- 0L
+  fake_prep <- function(...) { i <<- i %% length(seq_data) + 1L; seq_data[[i]] }
+  
+  classesAvailable <- data.table(
+    classToSearch = c("Road","Mine","Cutblock"),
+    dataName      = c("Transport","Mining","Forestry"),
+    dataClass     = c("roads","mines","cutblocks")
+  )
+  
+  # Make a local copy we can patch
+  dECCC <- disturbanceInfoFromECCC
+  
+  # IMPORTANT: stub returns NULL; it mutates dECCC in place — don't reassign!
+  stub(dECCC, "prepInputs", fake_prep)
+  stub(dECCC, "reproducible::prepInputs", fake_prep)  # covers qualified calls too
+  
+  expect_warning(
+    res <- dECCC(
+      studyArea = sa, RTM = rtm, classesAvailable = classesAvailable,
+      totalstudyAreaVAreaSqKm = 100, disturbanceList = list(),
+      destinationPath = tempdir(), diffYears = "2010_2015",
+      bufferedDisturbances = FALSE, maskOutLinesFromPolys = FALSE,
+      aggregateSameDisturbances = FALSE
+    ),
+    "Not all classes of OLD are in the NEW data"
+  )
+  
+  changed <- res$AD_changed
+  expect_true(all(c("Road","Mine","Cutblock") %in% changed$Class))
+  expect_equal(changed[Class == "Mine"]$yearOLD, 0)      # Mine added to OLD as 0
+  expect_equal(changed[Class == "Cutblock"]$yearNEW, 0)  # Cutblock added to NEW as 0
+})
+

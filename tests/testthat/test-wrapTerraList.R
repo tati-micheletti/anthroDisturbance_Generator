@@ -1,11 +1,3 @@
-library(testthat)
-library(terra)
-library(qs)
-library(stringi)
-library(zip)
-library(Require)
-library(mockery)
-
 # Helper: create a simple SpatVector for testing
 elem <- matrix(c(0,0, 1,1, 2,2), ncol=2, byrow=TRUE)
 create_dummy_vect <- function() terra::vect(elem, type="points")

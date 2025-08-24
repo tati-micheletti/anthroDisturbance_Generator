@@ -1,11 +1,4 @@
 # tests/testthat/test-saveDisturbances.R
-
-library(testthat)
-library(terra)
-library(sf)
-library(raster)
-library(sp)
-
 # Set up temporary output directory and clear previous disturbance files
 output_dir <- tempdir()
 Paths <<- list(outputPath = output_dir) # Use <<- to assign in the global environment

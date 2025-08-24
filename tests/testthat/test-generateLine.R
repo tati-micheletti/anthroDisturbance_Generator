@@ -1,6 +1,3 @@
-library(testthat)
-library(terra)
-
 # NA handling
 test_that("generateLine handles NA inputs correctly", {
   # Test NA angle

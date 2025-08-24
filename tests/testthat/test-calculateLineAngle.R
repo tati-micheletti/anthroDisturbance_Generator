@@ -1,5 +1,3 @@
-library(testthat)
-library(terra)
 
 test_that("horizontal line to the right has angle 0°", {
   pts <- matrix(c(0,0, 10,0), ncol = 2, byrow = TRUE)

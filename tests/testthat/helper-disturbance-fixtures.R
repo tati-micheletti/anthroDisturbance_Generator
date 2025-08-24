@@ -1,11 +1,4 @@
 # tests/testthat/helper-disturbance-fixtures.R
-suppressPackageStartupMessages({
-  library(terra)
-  library(sf)
-  library(data.table)
-  library(testthat)
-})
-
 # --- study raster / study area: 10 km x 10 km (100 km²) ----------------------
 r  <- rast(nrows = 200, ncols = 200, xmin = 0, xmax = 10000, ymin = 0, ymax = 10000, vals = 1)
 crs(r) <- "EPSG:3005"

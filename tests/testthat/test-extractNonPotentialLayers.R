@@ -1,7 +1,4 @@
 # Unit tests for extractNonPotentialLayers()
-library(testthat)
-library(data.table)
-
 # Helper to compare data.tables ignoring row order
 expect_dt_equal <- function(actual, expected) {
   setkey(actual, Sector, dataClass)

@@ -1,6 +1,3 @@
-library(testthat)
-library(terra)
-
 test_that("middle point for odd dimensions", {
   # 5 rows, 7 cols → trunc(5/2)=2, trunc(7/2)=3
   r <- rast(nrows = 5, ncols = 7)

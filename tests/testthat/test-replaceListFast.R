@@ -1,6 +1,3 @@
-library(testthat)
-library(terra)
-
 # build inputs
 distList   <- createDisturbanceList()
 distParam  <- createDisturbanceParameters(distList)
@@ -377,5 +374,94 @@ test_that("merged vector overwrites a numeric 'Class' with the layer name as cha
   expect_true("Class" %in% names(merged))
   expect_true(is.character(merged$Class))
   expect_true(all(merged$Class == "mining"))
+})
+
+### additional tests to up coverage
+testthat::test_that("replaceListFast buffers non-polygons and grows width until extent is valid (pastDist branch)", {
+  testthat::skip_if_not_installed("terra")
+  library(terra); library(data.table)
+  
+  # helpers
+  mk_pt <- function(x, y, crs="EPSG:4326") vect(cbind(x, y), type="points", crs = crs)
+  mk_square <- function(x, y, half=0.001, crs="EPSG:4326") {
+    e <- ext(x - half, x + half, y - half, y + half)
+    as.polygons(e, crs = crs)
+  }
+  
+  # Sector / layer names don't matter; they just need to match across inputs
+  Sector <- "mining"; lay <- "mines"
+  
+  # past = POINTS (lon/lat), curr = POLYGON  → triggers pastDist tiny-buffer → while() growth
+  past_points <- mk_pt(0, 0)                 # geomtype = "points", nrow > 0
+  curr_poly   <- mk_square(0, 0, half=1e-5)  # already polygon, small but valid
+  
+  disturbanceList <- list(
+    mining = list(mines = past_points)
+  )
+  
+  updatedLayersAll <- list(
+    individualLayers = list(
+      mining = list(mines = curr_poly)
+    )
+  )
+  
+  # Not an Enlarging row → we go through the merge path, not the early-return
+  disturbanceParameters <- data.table(
+    dataName = Sector,
+    disturbanceOrigin = lay,
+    disturbanceEnd = "",
+    disturbanceType = "Generating"
+  )
+  
+  out <- replaceListFast(disturbanceList, updatedLayersAll, currentTime = 2000, disturbanceParameters)
+  
+  # We should get polygons back for this layer after harmonization
+  testthat::expect_true("mining" %in% names(out))
+  testthat::expect_true("mines"  %in% names(out$mining))
+  testthat::expect_s4_class(out$mining$mines, "SpatVector")
+  testthat::expect_equal(geomtype(out$mining$mines), "polygons")
+  testthat::expect_true(nrow(out$mining$mines) >= 1)
+})
+
+testthat::test_that("replaceListFast buffers non-polygons and grows width until extent is valid (currDist branch)", {
+  testthat::skip_if_not_installed("terra")
+  library(terra); library(data.table)
+  
+  mk_pt <- function(x, y, crs="EPSG:4326") vect(cbind(x, y), type="points", crs = crs)
+  mk_square <- function(x, y, half=0.001, crs="EPSG:4326") {
+    e <- ext(x - half, x + half, y - half, y + half)
+    as.polygons(e, crs = crs)
+  }
+  
+  Sector <- "energy"; lay <- "transformers"
+  
+  # past = POLYGON, curr = POINTS → triggers currDist tiny-buffer → while() growth
+  past_poly     <- mk_square(1, 1, half=1e-5) # polygon
+  curr_points   <- mk_pt(1, 1)                # points, nrow > 0
+  
+  disturbanceList <- list(
+    energy = list(transformers = past_poly)
+  )
+  
+  updatedLayersAll <- list(
+    individualLayers = list(
+      energy = list(transformers = curr_points)
+    )
+  )
+  
+  disturbanceParameters <- data.table(
+    dataName = Sector,
+    disturbanceOrigin = lay,
+    disturbanceEnd = "",
+    disturbanceType = "Generating"
+  )
+  
+  out <- replaceListFast(disturbanceList, updatedLayersAll, currentTime = 2000, disturbanceParameters)
+  
+  testthat::expect_true("energy" %in% names(out))
+  testthat::expect_true("transformers" %in% names(out$energy))
+  testthat::expect_s4_class(out$energy$transformers, "SpatVector")
+  testthat::expect_equal(geomtype(out$energy$transformers), "polygons")
+  testthat::expect_true(nrow(out$energy$transformers) >= 1)
 })
 

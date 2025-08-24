@@ -1,6 +1,5 @@
 # Unit tests for cleanupList()
 
-library(testthat)
 # Helper to clone a list deeply
 copy_list <- function(x) { unserialize(serialize(x, NULL)) }
 

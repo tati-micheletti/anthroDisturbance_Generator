@@ -1,5 +1,3 @@
-library(testthat)
-
 # Disable crayon for clean message testing
 withr::local_options(list(crayon.enabled = FALSE))
 

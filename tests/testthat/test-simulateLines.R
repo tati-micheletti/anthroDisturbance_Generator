@@ -238,3 +238,65 @@ testthat::test_that("refinedStructure=TRUE yields at least one near-parallel or 
   }
   testthat::expect_true(has_pair)
 })
+
+### - additional tests for more coverage
+
+# Helper to make a single line by angle/length (degrees, meters) from (x,y)
+.make_line <- function(x, y, angle_deg, len) {
+  th <- angle_deg * pi/180
+  x2 <- x + len * cos(th)
+  y2 <- y + len * sin(th)
+  sf::st_sfc(sf::st_linestring(rbind(c(x, y), c(x2, y2))), crs = 3005)
+}
+
+# Build a clustered set of 4 lines:
+# two parallel pairs: (10°, 12°) and (80°, 82°), with very small SD on lengths
+# so SD < 0.01*mean → triggers SD <- max(SD, eps) before rtruncnorm
+.make_clustered_lines <- function() {
+  sfc <- c(
+    .make_line(   0, 0, 10, 100),
+    .make_line( 100, 0, 12, 101),
+    .make_line( 200, 0, 80, 100),
+    .make_line( 300, 0, 82, 101)
+  )
+  sf <- sf::st_sf(Pot_Clus = rep("1_1", length(sfc)), geometry = sfc)
+  v <- terra::vect(sf)
+  v
+}
+
+test_that("simulateLines: healthy truncated-normal path runs and returns finite angles", {
+  testthat::skip_if_not_installed("truncnorm")
+  set.seed(42)
+  
+  Lines <- .make_clustered_lines()
+  
+  out <- simulateLines(
+    Lines               = Lines,
+    distThreshold       = 50,   # sets buffDist for centroid sampling
+    distNewLinesFact    = 2,
+    refinedStructure    = TRUE  # enters spacing + parallel-pair logic
+  )
+  
+  expect_s4_class(out, "SpatVector")
+  expect_true(nrow(out) >= 4)                   # produced lines
+  expect_true(all(is.finite(out$angles)))       # angles computed
+})
+
+test_that("simulateLines: parallel-pair generation (buffer point → generateLine) is exercised", {
+  testthat::skip_if_not_installed("truncnorm")
+  set.seed(123)
+  
+  Lines <- .make_clustered_lines()
+  
+  out <- simulateLines(
+    Lines, distThreshold = 60, distNewLinesFact = 2, refinedStructure = TRUE
+  )
+  
+  # Heuristic: result should contain at least two lines that are ~parallel (≤ 10° apart modulo 180)
+  ang <- out$angles %% 180
+  diffs <- abs(outer(ang, ang, "-"))
+  diffs <- pmin(diffs, 180 - diffs)            # min angular distance modulo 180
+  n_parallelish_pairs <- sum(diffs[upper.tri(diffs)] <= 10)
+  
+  expect_gte(n_parallelish_pairs, 2)
+})

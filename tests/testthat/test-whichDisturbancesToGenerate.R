@@ -1,5 +1,3 @@
-library(testthat)
-
 # Basic sequencing
 test_that("picks correct indices for simple intervals", {
   params <- data.frame(disturbanceInterval = c(1, 2, 3))
