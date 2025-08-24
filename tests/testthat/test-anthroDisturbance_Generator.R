@@ -216,7 +216,7 @@ testthat::test_that("Primary sim runs one year and updates outputs (vector mode)
       clusterDistance                    = 10,
       distanceNewLinesFactor             = 1,
       refinedStructure                   = FALSE,
-      disturbFirstYear                   = TRUE,
+      disturbFirstYear                   = FALSE,
       .seed = list(anthroDisturbance_Generator = list(
         calculatingSize=1L, calculatingRate=2L, generatingDisturbances=3L, updatingDisturbanceList=4L
       ))
@@ -249,8 +249,8 @@ testthat::test_that("Primary sim runs one year and updates outputs (vector mode)
   simOut <- SpaDES.core::spades(sim, until = 2)
   
   # ---- Assertions: year layer exists & settlements grew ----------------------
-  testthat::expect_true("Year2000" %in% names(simOut$currentDisturbanceLayer))
-  lay <- simOut$currentDisturbanceLayer[["Year2000"]]
+  testthat::expect_true("Year2001" %in% names(simOut$currentDisturbanceLayer))
+  lay <- simOut$currentDisturbanceLayer[["Year2001"]]
   testthat::expect_true(is.list(lay))  # vector mode returns a list of SpatVectors
   
   # settlements enlarging increased area
