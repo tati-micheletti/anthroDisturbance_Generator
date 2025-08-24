@@ -128,36 +128,27 @@ test_that("skips updating when the disturbance layer is NULL or empty list", {
 
 # 4. Empirical fallback: negative change is clamped to zero
 test_that("negative empirical change yields zero disturbance rate without warning", {
-  # stub disturbanceInfoFromECCC to return negative growth
   stub_data <- data.table(Class = "C1", yearOLD = 5, yearNEW = 0)
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
   
-  params <- params_template()
-  # suppress messages rather than expect_silent, since calculateRate uses message()
-  suppressMessages(
+  mockery::stub(calculateRate, "disturbanceInfoFromECCC",
+                function(...) list(AD_changed = stub_data))
+  
+  suppressMessages({
     result <- calculateRate(
-      disturbanceParameters             = params,
-      disturbanceDT                     = disturbanceDT,
-      disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
-      whichToUpdate                     = 1L,
-      RTM                               = rast_template(),
-      studyArea                         = create_study_area(),
-      destinationPath                   = tempdir(),
-      DisturbanceRate                   = NULL,
-      totalDisturbanceRate              = NULL,
-      disturbanceRateRelatesToBufferedArea = FALSE,
-      maskOutLinesFromPolys               = FALSE,
-      aggregateSameDisturbances           = FALSE,
-      archiveNEW                          = NULL,
-      targetFileNEW                       = NULL,
-      urlNEW                              = NULL,
-      archiveOLD                          = NULL,
-      targetFileOLD                       = NULL,
-      urlOLD                              = NULL
+      disturbanceParameters                  = params_template(),
+      disturbanceDT                          = disturbanceDT,
+      disturbanceList                        = list(dn1 = list(orig1 = dummy_layer)),
+      whichToUpdate                          = 1L,
+      RTM                                    = rast_template(),
+      studyArea                              = create_study_area(),
+      destinationPath                        = tempdir(),
+      DisturbanceRate                        = NULL,
+      totalDisturbanceRate                   = NULL,
+      disturbanceRateRelatesToBufferedArea   = FALSE,
+      maskOutLinesFromPolys                  = FALSE,
+      aggregateSameDisturbances              = FALSE
     )
-  )
+  })
   expect_equal(nrow(result), 1)
   expect_equal(result$disturbanceRate, 0)
 })
@@ -166,9 +157,10 @@ test_that("negative empirical change yields zero disturbance rate without warnin
 test_that("positive empirical change yields correct disturbance rate within tolerance", {
   # stub disturbanceInfoFromECCC to return positive growth
   stub_data <- data.table(Class = "C1", yearOLD = 0, yearNEW = 5)
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  mockery::stub(
+    calculateRate, "disturbanceInfoFromECCC",
+    function(...) list(AD_changed = stub_data)
+  )
   
   params <- params_template()
   # suppress messages
@@ -211,9 +203,10 @@ test_that("correctly applies totalDisturbanceRate when DisturbanceRate is NULL",
     calculatedDisturbanceProportion = NA_real_
   )
   
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data, proportionTable = proportionTable), envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  mockery::stub(
+    calculateRate, "disturbanceInfoFromECCC",
+    function(...) list(AD_changed = stub_data, proportionTable = proportionTable)
+  )
   
   expect_warning(  
     result <- calculateRate(
@@ -246,9 +239,10 @@ test_that("correctly applies totalDisturbanceRate when DisturbanceRate is NULL",
 
 # 7. Test for warning when diffYears is OLD_2015
 test_that("issues warning when diffYears is OLD_2015", {
-  original <- get("disturbanceInfoFromECCC", envir = .GlobalEnv)
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = data.table(Class=character(), yearOLD=integer(), yearNEW=integer())), envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original, envir = .GlobalEnv), add = TRUE)
+  mockery::stub(
+    calculateRate, "disturbanceInfoFromECCC",
+    function(...) list(AD_changed = data.table(Class=character(), yearOLD=integer(), yearNEW=integer()))
+  )
   
   params <- params_template()
   expect_warning(
@@ -280,9 +274,11 @@ test_that("issues warning when diffYears is OLD_2015", {
 # 8. Test for zero empirical change
 test_that("zero empirical change yields zero disturbance rate", {
   stub_data <- data.table(Class = "C1", yearOLD = 5, yearNEW = 5)
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+
+  mockery::stub(
+    calculateRate, "disturbanceInfoFromECCC",
+    function(...) list(AD_changed = stub_data)
+  )
   
   params <- params_template()
   suppressMessages(
@@ -345,9 +341,13 @@ test_that("correctly handles multiple disturbances", {
     yearNEW = c(5, 10)
   )
   
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  prop_tbl <- data.table(dataClass = c("orig1","orig2"),
+                         proportionOfTotalDisturbance = c(0.5, 0.5))
+  
+  mockery::stub(
+    calculateRate, "disturbanceInfoFromECCC",
+    function(...) list(AD_changed = stub_data, proportionTable = prop_tbl)
+  )
   
   result <- calculateRate(
     disturbanceParameters             = params,
@@ -381,12 +381,10 @@ test_that("correctly handles multiple disturbances", {
 
 # 10. Test for cache file handling
 test_that("uses cached file if available", {
-  originalECCC <- get("disturbanceInfoFromECCC", envir = .GlobalEnv)
-  assign("disturbanceInfoFromECCC", function(...){
-    # return only AD_changed so calculateRate_new reads your CSV but never calls prepInputs()
-    list(AD_changed = data.table(Class="C1", yearOLD=0, yearNEW=5))
-  }, envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", originalECCC, envir = .GlobalEnv), add = TRUE)
+  mockery::stub(
+    calculateRate, "disturbanceInfoFromECCC",
+    function(...) list(AD_changed = data.table(Class="C1", yearOLD=0, yearNEW=5))
+  )
   
   params <- params_template()
   key   <- digest::digest(create_study_area())
@@ -425,111 +423,116 @@ test_that("uses cached file if available", {
 
 # 11.
 test_that("totalDisturbanceRate distributes rates correctly", {
-  # Mock disturbanceInfoFromECCC to return proportion table
-  stub_data <- list(
+  testthat::skip_if_not_installed("mockery")
+  
+  # Return both AD_changed and a proportion table used for distribution
+  stub_payload <- list(
     AD_changed = data.table(Class = "C1", yearOLD = 1, yearNEW = 2),
     proportionTable = data.table(dataClass = "orig1", proportionOfTotalDisturbance = 0.5)
   )
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) stub_data, envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  mockery::stub(
+    calculateRate, "disturbanceInfoFromECCC",
+    function(...) stub_payload
+  )
   
   params <- params_template()
   
   expect_warning(
     result <- calculateRate(
-      disturbanceParameters           = params,
-      disturbanceDT                   = disturbanceDT,
-      disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
-      whichToUpdate                   = 1L,
-      RTM                             = rast_template(),
-      studyArea                       = create_study_area(),
-      destinationPath                 = tempdir(),
-      DisturbanceRate                 = NULL,
-      totalDisturbanceRate            = 10, # 10% total rate
-      diffYears                       = "2010_2015",
-      disturbanceRateRelatesToBufferedArea = FALSE,
-      maskOutLinesFromPolys           = FALSE,
-      aggregateSameDisturbances       = FALSE,
-      archiveNEW                      = NULL,
-      targetFileNEW                   = NULL,
-      urlNEW                          = NULL,
-      archiveOLD                      = NULL,
-      targetFileOLD                   = NULL,
-      urlOLD                          = NULL
-    ), "The totalDisturbanceRate was supplied as 10"
+      disturbanceParameters                 = params,
+      disturbanceDT                         = disturbanceDT,
+      disturbanceList                       = list(dn1 = list(orig1 = dummy_layer)),
+      whichToUpdate                         = 1L,
+      RTM                                   = rast_template(),
+      studyArea                             = create_study_area(),
+      destinationPath                       = tempdir(),
+      DisturbanceRate                       = NULL,
+      totalDisturbanceRate                  = 10, # 10% total rate
+      diffYears                             = "2010_2015",
+      disturbanceRateRelatesToBufferedArea  = FALSE,
+      maskOutLinesFromPolys                 = FALSE,
+      aggregateSameDisturbances             = FALSE,
+      archiveNEW                            = NULL,
+      targetFileNEW                         = NULL,
+      urlNEW                                = NULL,
+      archiveOLD                            = NULL,
+      targetFileOLD                         = NULL,
+      urlOLD                                = NULL
+    ),
+    "The totalDisturbanceRate was supplied as 10"
   )
   
-  # Expect 50% of total rate (0.5 * 10 = 5)
+  # 50% of total rate (0.5 * 10 = 5)
   expect_equal(result$disturbanceRate, 5)
 })
 
 # 12.
 test_that("disturbance is dropped when missing from proportion table", {
-  # Proportion table doesn't include our disturbance
-  stub_data <- list(
-    proportionTable = data.table(dataClass = "other_disturbance", proportionOfTotalDisturbance = 1)
-  )
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) list(
-    AD_changed = data.table(Class=character(), yearOLD=integer(), yearNEW=integer()),
-    proportionTable = data.table(dataClass="other", proportionOfTotalDisturbance=1)
-  ), envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
-  
   params <- params_template()
   
-  result <- suppressWarnings(calculateRate(
-    disturbanceParameters           = params,
-    disturbanceDT                   = disturbanceDT,
-    disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
-    whichToUpdate                   = 1L,
-    RTM                             = rast_template(),
-    studyArea                       = create_study_area(),
-    destinationPath                 = tempdir(),
-    DisturbanceRate                 = NULL,
-    totalDisturbanceRate            = 10,
-    diffYears                       = "2010_2015",
-    disturbanceRateRelatesToBufferedArea = FALSE,
-    maskOutLinesFromPolys           = FALSE,
-    aggregateSameDisturbances       = FALSE,
-    archiveNEW                      = NULL,
-    targetFileNEW                   = NULL,
-    urlNEW                          = NULL,
-    archiveOLD                      = NULL,
-    targetFileOLD                   = NULL,
-    urlOLD                          = NULL
+  # ECCC returns no matching AD_changed rows and a proportion table for another class
+  eccc_resp <- list(
+    AD_changed = data.table(Class = character(), yearOLD = integer(), yearNEW = integer()),
+    proportionTable = data.table(dataClass = "other", proportionOfTotalDisturbance = 1)
+  )
+  
+  # Patch a local copy of calculateRate so stubbing cannot leak
+  local_calc <- calculateRate
+  mockery::stub(local_calc, "disturbanceInfoFromECCC", function(...) eccc_resp)
+  
+  result <- suppressWarnings(local_calc(
+    disturbanceParameters                 = params,
+    disturbanceDT                         = disturbanceDT,
+    disturbanceList                       = list(dn1 = list(orig1 = dummy_layer)),
+    whichToUpdate                         = 1L,
+    RTM                                   = rast_template(),
+    studyArea                             = create_study_area(),
+    destinationPath                       = tempdir(),
+    DisturbanceRate                       = NULL,
+    totalDisturbanceRate                  = 10,
+    diffYears                              = "2010_2015",
+    disturbanceRateRelatesToBufferedArea  = FALSE,
+    maskOutLinesFromPolys                 = FALSE,
+    aggregateSameDisturbances             = FALSE,
+    archiveNEW                            = NULL,
+    targetFileNEW                         = NULL,
+    urlNEW                                = NULL,
+    archiveOLD                            = NULL,
+    targetFileOLD                         = NULL,
+    urlOLD                                = NULL
   ))
   
   key <- params[1, .(dataName, dataClass, disturbanceType, disturbanceOrigin)]
-  updated <- result[key, on=names(key)]
+  updated <- result[key, on = names(key)]
   expect_equal(updated$disturbanceRate, 0)
-  expect_warning(calculateRate(
-    disturbanceParameters           = params,
-    disturbanceDT                   = disturbanceDT,
-    disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
-    whichToUpdate                   = 1L,
-    RTM                             = rast_template(),
-    studyArea                       = create_study_area(),
-    destinationPath                 = tempdir(),
-    DisturbanceRate                 = NULL,
-    totalDisturbanceRate            = 10,
-    diffYears                       = "2010_2015",
-    disturbanceRateRelatesToBufferedArea = FALSE,
-    maskOutLinesFromPolys           = FALSE,
-    aggregateSameDisturbances       = FALSE,
-    archiveNEW                      = NULL,
-    targetFileNEW                   = NULL,
-    urlNEW                          = NULL,
-    archiveOLD                      = NULL,
-    targetFileOLD                   = NULL,
-    urlOLD                          = NULL
+  
+  expect_warning(local_calc(
+    disturbanceParameters                 = params,
+    disturbanceDT                         = disturbanceDT,
+    disturbanceList                       = list(dn1 = list(orig1 = dummy_layer)),
+    whichToUpdate                         = 1L,
+    RTM                                   = rast_template(),
+    studyArea                             = create_study_area(),
+    destinationPath                       = tempdir(),
+    DisturbanceRate                       = NULL,
+    totalDisturbanceRate                  = 10,
+    diffYears                              = "2010_2015",
+    disturbanceRateRelatesToBufferedArea  = FALSE,
+    maskOutLinesFromPolys                 = FALSE,
+    aggregateSameDisturbances             = FALSE,
+    archiveNEW                            = NULL,
+    targetFileNEW                         = NULL,
+    urlNEW                                = NULL,
+    archiveOLD                            = NULL,
+    targetFileOLD                         = NULL,
+    urlOLD                                = NULL
   ), "No historical ECCC disturbance for these classes → setting rate to zero", ignore.case = TRUE)
 })
 
+
 # 13.
 test_that("handles multiple whichToUpdate rows", {
-  # Create two disturbances to update
+  # Two disturbances to update
   params <- rbind(
     params_template(),
     data.table(
@@ -554,42 +557,41 @@ test_that("handles multiple whichToUpdate rows", {
   )
   
   # Mock ECCC data for both classes
-  stub_data <- list(
+  eccc_resp <- list(
     AD_changed = data.table(
-      Class = c("C1", "C2"),
+      Class  = c("C1", "C2"),
       yearOLD = c(1, 2),
       yearNEW = c(3, 4)
-    ))
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) stub_data, envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
-  
-  result <- suppressMessages(
-    calculateRate(
-      disturbanceParameters           = params,
-      disturbanceDT                   = disturbanceDT2,
-      disturbanceList                 = list(
-        dn1 = list(orig1 = dummy_layer),
-        dn2 = list(orig2 = dummy_layer)
-      ),
-      whichToUpdate                   = whichToUpdate,
-      RTM                             = rast_template(),
-      studyArea                       = create_study_area(),
-      destinationPath                 = tempdir(),
-      DisturbanceRate                 = NULL,
-      totalDisturbanceRate            = NULL,
-      diffYears                       = "2010_2015",
-      disturbanceRateRelatesToBufferedArea = FALSE,
-      maskOutLinesFromPolys           = FALSE,
-      aggregateSameDisturbances       = FALSE,
-      archiveNEW                      = NULL,
-      targetFileNEW                   = NULL,
-      urlNEW                          = NULL,
-      archiveOLD                      = NULL,
-      targetFileOLD                   = NULL,
-      urlOLD                          = NULL
     )
   )
+  
+  local_calc <- calculateRate
+  mockery::stub(local_calc, "disturbanceInfoFromECCC", function(...) eccc_resp)
+  
+  result <- suppressMessages(local_calc(
+    disturbanceParameters                 = params,
+    disturbanceDT                         = disturbanceDT2,
+    disturbanceList                       = list(
+      dn1 = list(orig1 = dummy_layer),
+      dn2 = list(orig2 = dummy_layer)
+    ),
+    whichToUpdate                         = whichToUpdate,
+    RTM                                   = rast_template(),
+    studyArea                             = create_study_area(),
+    destinationPath                       = tempdir(),
+    DisturbanceRate                       = NULL,
+    totalDisturbanceRate                  = NULL,
+    diffYears                              = "2010_2015",
+    disturbanceRateRelatesToBufferedArea  = FALSE,
+    maskOutLinesFromPolys                 = FALSE,
+    aggregateSameDisturbances             = FALSE,
+    archiveNEW                            = NULL,
+    targetFileNEW                         = NULL,
+    urlNEW                                = NULL,
+    archiveOLD                            = NULL,
+    targetFileOLD                         = NULL,
+    urlOLD                                = NULL
+  ))
   
   expect_equal(nrow(result), 2)
   expect_true(all(result$disturbanceRate > 0))
@@ -598,37 +600,37 @@ test_that("handles multiple whichToUpdate rows", {
 # 14.  
 test_that("final rate message includes correct total", {
   params <- params_template()
-  stub_data <- list(AD_changed = data.table(Class = "C1", yearOLD = 0, yearNEW = 5))
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) stub_data, envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  eccc_resp <- list(AD_changed = data.table(Class = "C1", yearOLD = 0, yearNEW = 5))
   
   studyArea <- create_study_area()
   studyV <- terra::aggregate(studyArea)
   totalArea <- terra::expanse(studyV, unit = "km", transform = FALSE)
-  expected_rate <- ((5-0)/5/totalArea)*100
+  expected_rate <- ((5 - 0) / 5 / totalArea) * 100
+  
+  local_calc <- calculateRate
+  mockery::stub(local_calc, "disturbanceInfoFromECCC", function(...) eccc_resp)
   
   expect_message(
-    calculateRate(
-      disturbanceParameters           = params,
-      disturbanceDT                   = disturbanceDT,
-      disturbanceList                 = list(dn1 = list(orig1 = dummy_layer)),
-      whichToUpdate                   = 1L,
-      RTM                             = rast_template(),
-      studyArea                       = studyArea,
-      destinationPath                 = tempdir(),
-      DisturbanceRate                 = NULL,
-      totalDisturbanceRate            = NULL,
-      diffYears                       = "2010_2015",
-      disturbanceRateRelatesToBufferedArea = FALSE,
-      maskOutLinesFromPolys           = FALSE,
-      aggregateSameDisturbances       = FALSE,
-      archiveNEW                      = NULL,
-      targetFileNEW                   = NULL,
-      urlNEW                          = NULL,
-      archiveOLD                      = NULL,
-      targetFileOLD                   = NULL,
-      urlOLD                          = NULL
+    local_calc(
+      disturbanceParameters                 = params,
+      disturbanceDT                         = disturbanceDT,
+      disturbanceList                       = list(dn1 = list(orig1 = dummy_layer)),
+      whichToUpdate                         = 1L,
+      RTM                                   = rast_template(),
+      studyArea                             = studyArea,
+      destinationPath                       = tempdir(),
+      DisturbanceRate                       = NULL,
+      totalDisturbanceRate                  = NULL,
+      diffYears                              = "2010_2015",
+      disturbanceRateRelatesToBufferedArea  = FALSE,
+      maskOutLinesFromPolys                 = FALSE,
+      aggregateSameDisturbances             = FALSE,
+      archiveNEW                            = NULL,
+      targetFileNEW                         = NULL,
+      urlNEW                                = NULL,
+      archiveOLD                            = NULL,
+      targetFileOLD                         = NULL,
+      urlOLD                                = NULL
     ),
     paste0("Total expected yearly rate.*", round(expected_rate, 4), "%")
   )
@@ -754,10 +756,9 @@ test_that("errors cleanly when DisturbanceRate has no matching row", {
 # 18. Missing class in ECCC data
 test_that("skips disturbance when class missing in ECCC data", {
   stub_data <- data.table(Class = "OTHER_CLASS", yearOLD = 5, yearNEW = 10)
-  original_fn <- disturbanceInfoFromECCC
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), 
-         envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  
+  mockery::stub(calculateRate, "disturbanceInfoFromECCC",
+                function(...) list(AD_changed = stub_data))
   
   params <- params_template()
   
@@ -857,26 +858,30 @@ test_that("warns and uses first row when multiple DisturbanceRate matches", {
 
 # 20. Test that buffered/masking/aggregation flags are forwarded
 test_that("buffer, maskOutLinesFromPolys and aggregateSameDisturbances are passed to disturbanceInfoFromECCC", {
-  original_fn <- get("disturbanceInfoFromECCC", envir = .GlobalEnv)
+  testthat::skip_if_not_installed("mockery")
+  
   captured_args <- NULL
-  assign("disturbanceInfoFromECCC", function(...){
+  stub_fun <- function(...) {
     captured_args <<- list(...)
     list(AD_changed = data.table(Class = "C1", yearOLD = 0, yearNEW = 0))
-  }, envir = .GlobalEnv)
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  }
+  
+  # Patch a local copy of calculateRate to avoid global side effects
+  f <- calculateRate
+  mockery::stub(f, "disturbanceInfoFromECCC", stub_fun)
   
   params <- params_template()
   suppressMessages(
-    calculateRate(
-      disturbanceParameters             = params,
-      disturbanceDT                     = disturbanceDT,
-      disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
-      whichToUpdate                     = 1L,
-      RTM                               = rast_template(),
-      studyArea                         = create_study_area(),
-      destinationPath                   = tempdir(),
-      DisturbanceRate                   = NULL,
-      totalDisturbanceRate              = NULL,
+    f(
+      disturbanceParameters               = params,
+      disturbanceDT                       = disturbanceDT,
+      disturbanceList                     = list(dn1 = list(orig1 = dummy_layer)),
+      whichToUpdate                       = 1L,
+      RTM                                 = rast_template(),
+      studyArea                           = create_study_area(),
+      destinationPath                     = tempdir(),
+      DisturbanceRate                     = NULL,
+      totalDisturbanceRate                = NULL,
       disturbanceRateRelatesToBufferedArea = TRUE,
       maskOutLinesFromPolys               = TRUE,
       aggregateSameDisturbances           = TRUE,
@@ -889,10 +894,12 @@ test_that("buffer, maskOutLinesFromPolys and aggregateSameDisturbances are passe
     )
   )
   
-  expect_true(captured_args$bufferedDisturbances,      info = "buffer flag not forwarded")
-  expect_true(captured_args$maskOutLinesFromPolys,     info = "maskOutLinesFromPolys not forwarded")
-  expect_true(captured_args$aggregateSameDisturbances, info = "aggregateSameDisturbances not forwarded")
+  expect_true(is.list(captured_args), info = "stub not called")
+  expect_true(isTRUE(captured_args$bufferedDisturbances),      info = "buffer flag not forwarded")
+  expect_true(isTRUE(captured_args$maskOutLinesFromPolys),     info = "maskOutLinesFromPolys not forwarded")
+  expect_true(isTRUE(captured_args$aggregateSameDisturbances), info = "aggregateSameDisturbances not forwarded")
 })
+
 
 # -------------------------------------------------------------------
 # 21. Test empty whichToUpdate → returns original unmodified
@@ -1077,20 +1084,13 @@ test_that("DisturbanceRate: multiple matches -> warning and first row is used", 
 
 test_that("ECCC: no rows for requested classes -> warns and sets all targeted rates to 0", {
   skip_on_cran()
+  testthat::skip_if_not_installed("mockery")
   
-  # Define stub_data: empty table for all requested classes
-  stub_data <- data.table(
-    Class = character(),
-    yearOLD = numeric(),
-    yearNEW = numeric()
-  )
+  # Empty empirical table
+  stub_data <- data.table(Class = character(), yearOLD = numeric(), yearNEW = numeric())
   
-  # Save the original function
-  original_fn <- disturbanceInfoFromECCC
-  # Assign the stub
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
-  # Ensure the original function is restored after the test
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  f <- calculateRate
+  mockery::stub(f, "disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data))
   
   rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
   sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
@@ -1116,7 +1116,7 @@ test_that("ECCC: no rows for requested classes -> warns and sets all targeted ra
   )
   
   expect_warning(
-    out <- calculateRate(
+    out <- f(
       disturbanceParameters = dParams,
       disturbanceDT = dDT,
       disturbanceList = dl,
@@ -1141,20 +1141,13 @@ test_that("ECCC: no rows for requested classes -> warns and sets all targeted ra
 
 test_that("ECCC: per-class missing row -> WARNING + sets only that row to 0 (document desired fix)", {
   skip_on_cran()
+  testthat::skip_if_not_installed("mockery")
   
-  # Define stub_data: only "CUTBLOCKS" present, "MINES" missing
-  stub_data <- data.table(
-    Class = c("CUTBLOCKS"),
-    yearOLD = c(0),
-    yearNEW = c(0)
-  )
+  # Only CUTBLOCKS present; MINES missing
+  stub_data <- data.table(Class = "CUTBLOCKS", yearOLD = 0, yearNEW = 0)
   
-  # Save the original function
-  original_fn <- disturbanceInfoFromECCC
-  # Assign the stub
-  assign("disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data), envir = .GlobalEnv)
-  # Ensure the original function is restored after the test
-  on.exit(assign("disturbanceInfoFromECCC", original_fn, envir = .GlobalEnv), add = TRUE)
+  f <- calculateRate
+  mockery::stub(f, "disturbanceInfoFromECCC", function(...) list(AD_changed = stub_data))
   
   rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
   sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
@@ -1180,7 +1173,7 @@ test_that("ECCC: per-class missing row -> WARNING + sets only that row to 0 (doc
   )
   
   expect_warning(
-    out <- calculateRate(
+    out <- f(
       disturbanceParameters = dParams,
       disturbanceDT = dDT,
       disturbanceList = dl,

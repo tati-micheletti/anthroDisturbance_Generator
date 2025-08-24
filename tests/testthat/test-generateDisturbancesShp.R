@@ -373,6 +373,7 @@ test_that("Generating branch returns NULL for empty potential", {
 #13) 
 #---- Test for Generating (Polygon Area Bounds) ----
 test_that("Generating creates some disturbance but not more than intended (module-standard params)", {
+  skip_on_covr()  # this somehow blows up when doing covr()
   r  <- rast(nrows = 100, ncols = 100, xmin = 0, xmax = 1000, ymin = 0, ymax = 1000, vals = 1)
   crs(r) <- "EPSG:3005"
   sa <- as.polygons(ext(r))
