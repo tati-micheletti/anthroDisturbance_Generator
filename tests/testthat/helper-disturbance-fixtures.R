@@ -118,7 +118,9 @@ createDisturbanceParameters <- function(distList, res = .DEFAULT_RESOLUTION) {
   # ---- Generating ----
   gen_rows <- rbindlist(list(
     # Forestry: target ~0.2% of 100 km² = 0.2 km² = 200,000 m² per step → ~10 x 20k m² blocks
-    row_gen("forestry", "cutblocks",      "potentialCutblocks",     0.2, NA_character_),
+    row_gen("forestry", "cutblocks", "potentialCutblocks",
+            0.2,  # percent
+            size_expr = "rtnorm(1, 20000, 4000, lower = 5000)"),  # ~0.02 km²,
     # Mining: ~0.1% = 100,000 m² per step → ~1 pad of ~80k m²
     row_gen("mining",   "mining",         "potentialMining",        0.1, NA_character_),
     # Seismic (area ~ of buffered lines sample): aim ~0.1% = 100,000 m²
