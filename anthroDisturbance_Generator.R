@@ -540,6 +540,9 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
     },
     generatingDisturbances = {
       
+      # make sure .firstYear exists 
+      if (is.null(mod$.firstYear) || length(mod$.firstYear) != 1L) mod$.firstYear <- NA
+      
       if (all(P(sim)$saveInitialDisturbances,
               start(sim) == time(sim))){
         message(crayon::yellow(paste0("The parameter saveInitialDisturbances is TRUE.",
@@ -583,6 +586,9 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                     disturbanceParameters = sim$disturbanceParameters)
       }
       if (length(mod$.whichToRun) != 0){ # If anything is scheduled
+        # subset to include only scheduled disturbances to generate
+        dpar_run <- sim$disturbanceParameters[mod$.whichToRun]
+        
         forestryScheduled <- "forestry" %in% sim$disturbanceParameters[mod$.whichToRun, dataName]
         if (forestryScheduled) { # forestry scheduled?
           if (is.null(sim$rstCurrentBurn)){
@@ -606,7 +612,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
           return(NULL) 
         })
         if (P(sim)$generatedDisturbanceAsRaster){
-          mod$updatedLayers <- generateDisturbances(disturbanceParameters = sim$disturbanceParameters,
+          mod$updatedLayers <- generateDisturbances(disturbanceParameters = dpar_run,
                                                     disturbanceList = sim$disturbanceList,
                                                     currentTime = time(sim),
                                                     studyArea = sim$studyArea,
@@ -622,7 +628,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                     runName = P(sim)$.runName,
                                                     checkDisturbancesForBuffer = P(sim)$checkDisturbancesForBuffer)
         } else {
-          mod$updatedLayers <- generateDisturbancesShp(disturbanceParameters = sim$disturbanceParameters,
+          mod$updatedLayers <- generateDisturbancesShp(disturbanceParameters = dpar_run,
                                                        disturbanceList = sim$disturbanceList,
                                                        currentTime = time(sim),
                                                        studyArea = sim$studyArea,
@@ -658,17 +664,29 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       sim <- scheduleEvent(sim, time(sim) + P(sim)$runInterval, "anthroDisturbance_Generator", "generatingDisturbances")
     },
     updatingDisturbanceList = {
-      if (length(mod$.whichToRun) != 0){
-        sim$disturbanceList <- replaceListFast(disturbanceList = sim$disturbanceList,
-                                               updatedLayersAll = mod$updatedLayers,
-                                               currentTime = time(sim),
-                                               disturbanceParameters = sim$disturbanceParameters)
+      if (length(mod$.whichToRun) != 0) {
+        delta <- replaceListFast(
+          disturbanceList       = sim$disturbanceList,
+          updatedLayersAll      = mod$updatedLayers,
+          currentTime           = time(sim),
+          disturbanceParameters = sim$disturbanceParameters
+        )
         
-        if (P(sim)$saveCurrentDisturbances){
+        ## Merge per sector, per layer (do NOT drop sectors that didn’t update)
+        if (!is.null(delta) && length(delta)) {
+          for (sec in names(delta)) {
+            if (is.null(delta[[sec]])) next
+            if (is.null(sim$disturbanceList[[sec]])) sim$disturbanceList[[sec]] <- list()
+            for (lay in names(delta[[sec]])) {
+              sim$disturbanceList[[sec]][[lay]] <- delta[[sec]][[lay]]
+            }
+          }
+        }
+        
+        if (P(sim)$saveCurrentDisturbances) {
           message(paste0("Saving current disturbances for year ", time(sim)))
           saveDisturbances(disturbanceList = sim$disturbanceList,
-                           currentTime = time(sim), 
-                           overwrite = TRUE,
+                           currentTime = time(sim), overwrite = TRUE,
                            runName = P(sim)$.runName)
         }
       }
