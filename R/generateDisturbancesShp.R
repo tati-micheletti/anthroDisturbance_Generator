@@ -332,6 +332,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
             message(paste0("Generating disturbance for forestry. Updating potential layer for ",
                            "occurred fires and currently productive forest for year ", currentTime))
             
+            # guard against emtpy layers
+            if (is.null(potLay) || (inherits(potLay, "SpatVector") && terra::nrow(potLay) == 0)) {
+              message("Forestry: potential layer is empty or missing; skipping forestry generation for this year.")
+              return(NULL)
+            }
+            
             # First: Select only productive forests
             # Previous pixel strategy for Generating Disturbances
             # 2. Fasterize it
@@ -356,6 +362,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
             potLayT <- rast(potLayF)
             #potLay <- terra::as.polygons(potLayT)
             potLay <- terra::as.polygons(potLayT, values = TRUE, na.rm = TRUE)
+            
+            #safe exit if nothing left ----
+            if (terra::nrow(potLay) == 0) {
+              message("Forestry: no potential after fire masking; skipping for this year.")
+              return(NULL)
+            }
             
             # ensure the attribute is named "Potential"
             if (!"Potential" %in% names(potLay)) {
@@ -487,11 +499,18 @@ generateDisturbancesShp <- function(disturbanceParameters,
             } else {
               rowsToChoose <- max(1, nAvail - (ITR - 1)) : nAvail
             }
+            if (isTRUE(rowsToChoose == 0L) && target_m2 > 0) {
+              # ensure at least one feature if any potential exists
+              rowsToChoose <- 1L
+            }
             potLayTop <- potLay[rowsToChoose]
+            
+            # always start with full potential
+            potLayTopValid <- potLayTop
             
             # Now exclude where disturbance already exists
             # Use intersect to see if they overlap.
-            if (!ORIGIN == "seismicLines") # For seismic lines, intersection happens below
+            if (ORIGIN != "seismicLines") # For seismic lines, intersection happens below
               message(paste0("Intersecting existing disturbances with potential for development for ",
                              Sector, " -- ", ORIGIN))
             if (Sector == "forestry") {
@@ -509,7 +528,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 )
                 break
               }
-            } else if (!ORIGIN == "seismicLines") { # If "seismicLines", we don't need to erase as they can overlap
+            } else if (ORIGIN != "seismicLines") { # If "seismicLines", we don't need to erase as they can overlap
               if (is.null(allLays) || !inherits(allLays, "SpatVector") || nrow(allLays) == 0) {
                 potLayTopValid <- potLayTop
               } else {
@@ -524,13 +543,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
             } else {
               potLayTopValid <- potLayTop
             }
-            
             # If everything got erased, there's nothing more to add — stop
             if (!inherits(potLayTopValid, "SpatVector") || nrow(potLayTopValid) == 0) {
               warning("No valid potential features remain after erasing/intersection. Stopping.")
-              break
+              return(NULL)
             }
-            
+
             # Now check if there is enough space for the expected disturbance!
             totalAreaAvailable <- tryCatch(
               terra::expanse(terra::aggregate(potLayTopValid, dissolve = TRUE),
@@ -572,7 +590,33 @@ generateDisturbancesShp <- function(disturbanceParameters,
             # 4. Calculate the total percentage of the disturbance per polygon type
             buffSeisL <- terra::buffer(areaDistPerPoly, width = 3) # Need to aggregate to avoid double counting!
             areaDistPerPoly$area <- terra::expanse(buffSeisL, unit = "m", transform = FALSE)
-            areaDT <- as.data.table(areaDistPerPoly[, c("Potential", "area")])
+            
+            # --- Ensure polygons and required attributes for area accounting ----
+            if (inherits(areaDistPerPoly, "SpatVector")) {
+              gt <- terra::geomtype(areaDistPerPoly)[1]
+              if (gt == "lines") {
+                # use precomputed buffered layer if available (faster and consistent)
+                if (exists("buffSeisL", inherits = TRUE) &&
+                    inherits(buffSeisL, "SpatVector") &&
+                    terra::geomtype(buffSeisL)[1] == "polygons") {
+                  areaDistPerPoly <- buffSeisL
+                } else {
+                  # fallback: buffer now; width in METRES from params
+                  w <- if (!is.null(getOption("seismic_erase_width"))) getOption("seismic_erase_width") else 50
+                  if (exists("seismic_erase_width", inherits = TRUE)) w <- seismic_erase_width
+                  areaDistPerPoly <- terra::buffer(areaDistPerPoly, width = w)
+                }
+              }
+              # keep Potential and compute area by class
+              if (!"Potential" %in% names(areaDistPerPoly)) areaDistPerPoly$Potential <- 1L
+              areaDistPerPoly <- terra::aggregate(areaDistPerPoly, by = "Potential", fun = sum, dissolve = TRUE)
+              areaDistPerPoly$area <- terra::expanse(areaDistPerPoly)
+            }
+            
+            # Build the table explicitly (terra versions differ on `geom` arg)
+            df <- sf::st_drop_geometry(sf::st_as_sf(areaDistPerPoly))
+            areaDT <- data.table::as.data.table(df[, c("Potential","area")])
+            
             totAreaDT <- areaDT[, disturbedArea := sum(area), by = Potential]
             totAreaDT[, area := NULL]
             totAreaDT <- unique(totAreaDT)
@@ -583,6 +627,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
             # If provided, test that probabilityDisturbance matches the Potential
             potValsPassed <- unique(sort(probabilityDisturbance[[ORIGIN]][["Potential"]]))
             potValsLay <- unique(sort(potLayTopValid$Potential))
+            
             passTest <- all(potValsLay %in% potValsPassed)
             if (!passTest){
               if (!is.null(Lay)){
@@ -717,14 +762,42 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 
                 # 1. Add a column in how much each cluster represents in the total in m2 -- not by individual line!
                 cropLayFinalDT <- as.data.table(as.data.frame(cropLayFinal))
+                
+                # --- Standardize types / names to avoid year-to-year drift ---
+                # Potential must be integer (not factor/character)
+                if (is.factor(cropLayFinalDT$Potential)) {
+                  cropLayFinalDT[, Potential := as.integer(as.character(Potential))]
+                } else if (is.character(cropLayFinalDT$Potential)) {
+                  suppressWarnings(
+                    cropLayFinalDT[, Potential := as.integer(Potential)]
+                  )
+                }
+                
+                #    Ensure we have a single 'Class' column.
+                if (!"Class" %in% names(cropLayFinalDT)) {
+                  if ("Class_1" %in% names(cropLayFinalDT)) data.table::setnames(cropLayFinalDT, "Class_1", "Class")
+                  if ("Class_2" %in% names(cropLayFinalDT) && !"Class" %in% names(cropLayFinalDT))
+                    data.table::setnames(cropLayFinalDT, "Class_2", "Class")
+                }
+                
                 if (!"Pot_Clus" %in% names(cropLayFinalDT)){
                   message("Pot_Clus not found in cropLayFinalDT. Debug")
                   browser()
                 }
                 cropLayFinalDT[, sumBuff3mAreaM2 := sum(buff3mAreaM2), by = "Pot_Clus"] 
                 # Need to do by potential as for each potential, cluster numbers are repeated
-                totalBuff3mArea <- sum(cropLayFinalDT$buff3mArea)
-                cropLayFinalDT[, PercBuff3mAreaOfTotalM2 := 100*(sumBuff3mAreaM2/totalBuff3mArea),  by = "Pot_Clus"]
+                totalBuff3mArea <- sum(cropLayFinalDT$buff3mAreaM2, na.rm = TRUE)
+                
+                # Guard against division by zero and compute a single % per cluster
+                if (totalBuff3mArea <= 0) {
+                  cropLayFinalDT[, PercBuff3mAreaOfTotalM2 := 0]
+                } else {
+                  # Compute % once per cluster, then propagate
+                  clusPct <- cropLayFinalDT[, .(PercBuff3mAreaOfTotalM2 = 100 * sumBuff3mAreaM2[1] / totalBuff3mArea),
+                                            by = "Pot_Clus"]
+                  cropLayFinalDT <- clusPct[cropLayFinalDT, on = "Pot_Clus"]
+                }
+                
                 if (sum(unique(cropLayFinalDT[, c("Pot_Clus","PercBuff3mAreaOfTotalM2")]$PercBuff3mAreaOfTotalM2)) > 100.001){ 
                   message(paste0("Total contribution of clusters in total area is higher than 100%.",
                                  "Something may be wrong. Entering debug mode."))
@@ -736,6 +809,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 # Potential --> Represents the highest potential for being chosen.
                 # --> Draw for all potentials, the probability a cluster within these will be chosen (higher potential, higher chances)
                 # Normalize probabilities to sum to 1
+
                 probabilities <- unique(cropLayFinalDT$Potential) / sum(unique(cropLayFinalDT$Potential))
                 if (length(unique(cropLayFinalDT$Potential)) == 1){
                   sampledClusters <- rep(unique(cropLayFinalDT$Potential), times = growthStepEnlargingLines)### <~~~~~~~~~~~~ Changed here from 1000 to 1 to try increasing iterations number in Seismic lines, currently overdoing it.
