@@ -868,7 +868,9 @@ testthat::test_that("Cost-routed avoidance: vertical NA wall with a narrow gap",
   testthat::expect_identical(terra::geomtype(con), "lines")
   # Must not intersect the NA wall except through the gap -> all vertices allowed
   pts <- terra::densify(con, interval = 0.5)
-  vals <- terra::extract(avoid, pts)[,2]
+  pt_coords <- terra::crds(pts)
+  pt_vec <- terra::vect(pt_coords, type = "points", crs = terra::crs(avoid))
+  vals <- terra::extract(avoid, pt_vec)[,2]
   testthat::expect_true(all(!is.na(vals)))
   
   # Optional: ensure they cross near x=50 within gap band
