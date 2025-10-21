@@ -1,5 +1,17 @@
 # tests/testthat/helper-disturbance-fixtures.R
 # --- study raster / study area: 10 km x 10 km (100 km²) ----------------------
+
+# Gate all diagnostic plotting behind an option; default FALSE for CI runs.
+if (is.null(getOption("anthroDisturbance.enable_test_plots"))) {
+  options(anthroDisturbance.enable_test_plots = FALSE)
+}
+maybe_plot <- function(expr) {
+  if (!isTRUE(getOption("anthroDisturbance.enable_test_plots", FALSE))) {
+    return(invisible(NULL))
+  }
+  eval(substitute(expr), envir = parent.frame())
+}
+
 r  <- rast(nrows = 200, ncols = 200, xmin = 0, xmax = 10000, ymin = 0, ymax = 10000, vals = 1)
 crs(r) <- "EPSG:3005"
 sa <- as.polygons(ext(r)); crs(sa) <- crs(r)

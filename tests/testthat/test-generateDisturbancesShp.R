@@ -422,11 +422,11 @@ test_that("Generating creates some disturbance but not more than intended (modul
   # fetch output and compute only the newly generated area
   out_poly <- out_gen$individualLayers$forestry$cutblocks
   
-  plot(sa)
-  plot(existing_cutblocks
+  maybe_plot(plot(sa))
+  maybe_plot(plot(existing_cutblocks
        , add=TRUE
-       )
-  plot(out_poly, add=TRUE)
+       ))
+  maybe_plot(plot(out_poly, add=TRUE))
   
   expect_true(inherits(out_poly, "SpatVector"))
   
@@ -762,9 +762,9 @@ test_that("Connecting avoids raster obstacles (no blocking)", {
   
   con <- out$individualLayers$pipelines$roads
   
-  plot(avoid)
-  plot(roads, add=TRUE)
-  plot(con, add=TRUE)
+  maybe_plot(plot(avoid))
+  maybe_plot(plot(roads, add=TRUE))
+  maybe_plot(plot(con, add=TRUE))
   
   expect_s4_class(con, "SpatVector")
   expect_identical(terra::geomtype(con), "lines")
@@ -819,9 +819,9 @@ test_that("Blocking branch (connectingBlockSize) ignores obstacles (current beha
   
   con <- out$individualLayers$pipelines$roads
   
-  plot(avoid)
-  plot(roads, add=TRUE)
-  plot(con, add=TRUE)
+  maybe_plot(plot(avoid))
+  maybe_plot(plot(roads, add=TRUE))
+  maybe_plot(plot(con, add=TRUE))
   
   # EXPECT crossings (until implementation switches to cost-routed in blocking branch)
   expect_gt(nrow(terra::intersect(con, lake)), 0)
@@ -1540,7 +1540,7 @@ test_that("Cluster seeds have Pot_Clus on first year and Subsequent-year reuse p
   
   # Validate second run
   vec2 <- out2$individualLayers$seismic$seismicLines
-  plot(vec2)
+  maybe_plot(plot(vec2))
   expect_s4_class(vec2, "SpatVector")
   expect_equal(terra::geomtype(vec2), "lines")
   df2 <- terra::values(vec2)

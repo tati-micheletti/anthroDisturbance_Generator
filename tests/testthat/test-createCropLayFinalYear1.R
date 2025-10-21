@@ -19,8 +19,8 @@ test_that("Lines outside the potential polygon are dropped (cropping)", {
   line_crossing <-vect("LINESTRING (750 750, 2000 750)", crs = "EPSG:32633")
   Lay <- rbind(line_inside, line_outside, line_crossing)
   
-  plot(Lay)
-  plot(pot, add=TRUE)
+  maybe_plot(plot(Lay))
+  maybe_plot(plot(pot, add=TRUE))
   
   suppressMessages({
     res <- createCropLayFinalYear1(
@@ -33,7 +33,7 @@ test_that("Lines outside the potential polygon are dropped (cropping)", {
   })
   lines <- unpack_res(res)
   
-  plot(lines, add=TRUE, col="red")
+  maybe_plot(plot(lines, add=TRUE, col="red"))
   
   expect_s4_class(lines, "SpatVector")
   expect_equal(nrow(lines), 2)
@@ -462,4 +462,3 @@ test_that("createCropLayFinalYear1: availableArea equals potLayTopValid minus 50
   # Allow small numeric tolerance
   expect_equal(area_out, area_expect, tolerance = 1e-5)
 })
-

@@ -14,6 +14,9 @@ plot_disturbance_diagnostics <- function(distList, sa, r, rstCurrentBurn,
                                          seismic_erase_width = 50,
                                          outdir = tempdir(), tag = "pre_run") {
   stopifnot(inherits(sa, "SpatVector") || inherits(sa, "SpatRaster"))
+  if (!isTRUE(getOption("anthroDisturbance.enable_test_plots", FALSE))) {
+    return(invisible(character()))
+  }
   dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
   
   # helpers ----

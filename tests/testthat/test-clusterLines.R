@@ -111,8 +111,7 @@ test_that("plotClusterDiagnostic runs cleanly", {
   expect_warning(
     clusterLines(lines, distThreshold=1e6,
                  currPotential=1, totPotential=1,
-                 plotClusterDiagnostic=TRUE,
+                 plotClusterDiagnostic=isTRUE(getOption("anthroDisturbance.enable_test_plots", FALSE)),
                  runInParallel=FALSE), NA
   )
 })
-
