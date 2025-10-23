@@ -597,6 +597,23 @@ testthat::test_that("Generator runs on testing AOI forestry data", {
     Require.unload          = FALSE
   )
   
+  disturbanceParameters <- data.table::data.table(
+    dataName            = "forestry",
+    dataClass           = "potentialCutblocks",
+    disturbanceType     = "Generating",
+    disturbanceRate     = 5,         # percent of studyArea per interval
+    disturbanceSize     = "5000",
+    disturbanceOrigin   = "cutblocks",
+    disturbanceEnd      = "",
+    disturbanceInterval = 1L,
+    resolutionVector    = 30,
+    potentialField      = "Potential"
+  )
+  
+  # NEW: keep siteSelectionAsDistributing consistent with available origins
+  allowedOrigins <- unique(disturbanceParameters$disturbanceOrigin)
+  siteAsDistr <- if (length(allowedOrigins)) allowedOrigins else NA_character_
+  
   paramsList <- list(
     anthroDisturbance_Generator = list(
       .seed = list(
@@ -611,24 +628,13 @@ testthat::test_that("Generator runs on testing AOI forestry data", {
       saveInitialDisturbances = FALSE,
       saveCurrentDisturbances = FALSE,
       generatedDisturbanceAsRaster = FALSE,
-      maskWaterAndMountainsFromLines = FALSE
+      maskWaterAndMountainsFromLines = FALSE,
+      siteSelectionAsDistributing = siteAsDistr  # <— patched line
+      # Optionally also: siteSelectionAsGenerating = NA_character_
     )
   )
   
-  disturbanceParameters <- data.table::data.table(
-    dataName            = "forestry",
-    dataClass           = "potentialCutblocks",
-    disturbanceType     = "Generating",
-    disturbanceRate     = 5,  # percent of studyArea per interval
-    disturbanceSize     = "5000",
-    disturbanceOrigin   = "cutblocks",
-    disturbanceEnd      = "",
-    disturbanceInterval = 1L,
-    resolutionVector    = 30,
-    potentialField      = "Potential"
-  )
-  
-  initial_area <- sum(terra::expanse(fixtures$cutblocks, unit = "m", transform = FALSE))
+  initial_area   <- sum(terra::expanse(fixtures$cutblocks, unit = "m", transform = FALSE))
   potential_area <- sum(terra::expanse(fixtures$potentialCutblocks, unit = "m", transform = FALSE))
   
   sim <- suppressWarnings(SpaDES.core::simInit(
@@ -648,7 +654,7 @@ testthat::test_that("Generator runs on testing AOI forestry data", {
       DisturbanceRate       = data.table::data.table(),
       disturbanceList       = list(
         forestry = list(
-          cutblocks = fixtures$cutblocks,
+          cutblocks          = fixtures$cutblocks,
           potentialCutblocks = fixtures$potentialCutblocks
         )
       ),
@@ -659,6 +665,7 @@ testthat::test_that("Generator runs on testing AOI forestry data", {
   ))
   
   simOut <- suppressWarnings(SpaDES.core::spades(sim))
+  
   final_cutblocks <- simOut$disturbanceList$forestry$cutblocks
   testthat::expect_true(inherits(final_cutblocks, "SpatVector"))
   testthat::expect_true(terra::nrow(final_cutblocks) >= terra::nrow(fixtures$cutblocks))
@@ -667,3 +674,4 @@ testthat::test_that("Generator runs on testing AOI forestry data", {
   testthat::expect_true(final_area > initial_area)
   testthat::expect_true(final_area <= initial_area + potential_area + 1)
 })
+
