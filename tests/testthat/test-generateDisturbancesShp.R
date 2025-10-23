@@ -301,6 +301,108 @@ test_that("Multiple resolutionVector values generate an error", {
   )
 })
 
+test_that("generateDisturbancesShp uses testing AOI forestry data", {
+  req_pkgs <- c("terra", "sf", "data.table", "fasterize", "digest")
+  for (pkg in req_pkgs) skip_if_not_installed(pkg)
+  
+  fixtures <- load_testing_aoi_fixtures(resolution = 60)
+  skip_if(terra::nrow(fixtures$cutblocks) == 0,
+          "Testing AOI cutblocks fixture is empty")
+  skip_if(terra::nrow(fixtures$potentialCutblocks) == 0,
+          "Testing AOI potential cutblocks fixture is empty")
+  
+  potential_area <- sum(terra::expanse(fixtures$potentialCutblocks, unit = "m", transform = FALSE))
+  
+  dp_testing <- data.table::data.table(
+    dataName            = "forestry",
+    dataClass           = "potentialCutblocks",
+    disturbanceType     = "Generating",
+    disturbanceOrigin   = "cutblocks",
+    disturbanceRate     = 5,
+    disturbanceSize     = "5000",
+    disturbanceEnd      = "",
+    disturbanceInterval = 1L,
+    resolutionVector    = 30,
+    potentialField      = "Potential"
+  )
+  
+  disturbanceList_testing <- list(
+    forestry = list(
+      cutblocks = fixtures$cutblocks,
+      potentialCutblocks = fixtures$potentialCutblocks
+    )
+  )
+  
+  oldPaths <- if (exists("Paths", envir = .GlobalEnv, inherits = FALSE))
+    get("Paths", envir = .GlobalEnv) else NULL
+  on.exit({
+    if (is.null(oldPaths)) {
+      suppressWarnings(rm("Paths", envir = .GlobalEnv))
+    } else {
+      assign("Paths", oldPaths, envir = .GlobalEnv)
+    }
+  }, add = TRUE)
+  assign("Paths", list(outputPath = tempdir()), envir = .GlobalEnv)
+  
+  out_testing <- suppressWarnings(
+    generateDisturbancesShp(
+      disturbanceParameters = dp_testing,
+      disturbanceList = disturbanceList_testing,
+      rasterToMatch = fixtures$raster,
+      studyArea = fixtures$studyArea,
+      fires = NULL,
+      currentTime = 2021,
+      firstTime = FALSE,
+      growthStepGenerating = 10,
+      growthStepEnlargingPolys = 10,
+      growthStepEnlargingLines = 0.1,
+      currentDisturbanceLayer = NULL,
+      connectingBlockSize = NULL,
+      disturbanceRateRelatesToBufferedArea = FALSE,
+      outputsFolder = tempdir(),
+      seismicLineGrids = 10,
+      checkDisturbancesForBuffer = FALSE,
+      runName = "testing_aoi",
+      useRoadsPackage = FALSE,
+      siteSelectionAsDistributing = NA_character_,
+      probabilityDisturbance = list(),
+      maskWaterAndMountainsFromLines = FALSE,
+      featuresToAvoid = NULL,
+      altitudeCut = NA_real_,
+      clusterDistance = NA_real_,
+      distanceNewLinesFactor = 1,
+      runClusteringInParallel = FALSE,
+      useClusterMethod = FALSE,
+      refinedStructure = FALSE
+    )
+  )
+  
+  new_cutblocks <- out_testing$individualLayers$forestry$cutblocks
+  expect_true(inherits(new_cutblocks, "SpatVector"))
+  expect_gt(terra::nrow(new_cutblocks), 0)
+  
+  new_area <- sum(terra::expanse(new_cutblocks, unit = "m", transform = FALSE))
+  expect_gt(new_area, 0)
+  expect_true(new_area <= potential_area + 1)
+  
+  potential_overlap <- terra::intersect(new_cutblocks, fixtures$potentialCutblocks)
+  overlap_area <- if (terra::nrow(potential_overlap) > 0) {
+    sum(terra::expanse(potential_overlap, unit = "m", transform = FALSE))
+  } else 0
+  expect_lt(abs(overlap_area - new_area), max(0.2 * new_area, 1))
+  
+  existing_overlap <- if (terra::nrow(fixtures$cutblocks) > 0) {
+    sum(terra::expanse(terra::intersect(new_cutblocks, fixtures$cutblocks),
+                       unit = "m", transform = FALSE))
+  } else 0
+  expect_lt(existing_overlap, 1)
+  
+  current_layer <- out_testing$currentDisturbanceLayer$forestry$cutblocks
+  expect_true(inherits(current_layer, "SpatVector"))
+  current_area <- sum(terra::expanse(current_layer, unit = "m", transform = FALSE))
+  testthat::expect_equal(current_area, new_area, tolerance = 1)
+})
+
 
 # 4) Test: Generating returns NULL when no potential polygons
 

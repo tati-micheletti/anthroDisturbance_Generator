@@ -221,3 +221,47 @@ check_fixtures <- function(distList, dpar) {
   
   invisible(TRUE)
 }
+
+#— 5) fixtures backed by repository testing AOI data ---------------------------
+load_testing_aoi_fixtures <- function(resolution = 60) {
+  module_root <- normalizePath(file.path(testthat::test_path(), "..", ".."), mustWork = TRUE)
+  repo_root <- normalizePath(file.path(module_root, "..", ".."), mustWork = TRUE)
+  
+  aoi_path        <- file.path(repo_root, "data", "aoi", "aoi_testing.shp")
+  cutblocks_path  <- file.path(repo_root, "data", "testing", "Cutblocks.shp")
+  potential_path  <- file.path(repo_root, "data", "testing", "potentialCutblocks.shp")
+  
+  if (!file.exists(aoi_path) || !file.exists(cutblocks_path) || !file.exists(potential_path)) {
+    stop("Testing AOI fixtures are missing from the data directory")
+  }
+  
+  cutblocks <- terra::vect(cutblocks_path)
+  target_crs <- terra::crs(cutblocks)
+  studyArea <- terra::vect(aoi_path)
+  studyArea <- terra::project(studyArea, target_crs)
+  studyArea <- terra::aggregate(studyArea)
+  
+  rasterToMatch <- terra::rast(ext = terra::ext(studyArea),
+                               resolution = resolution,
+                               crs = target_crs)
+  terra::values(rasterToMatch) <- 1
+  
+  cutblocks <- terra::intersect(cutblocks, studyArea)
+  
+  potentialCutblocks <- terra::vect(potential_path)
+  potentialCutblocks <- terra::project(potentialCutblocks, target_crs)
+  potentialCutblocks <- terra::intersect(potentialCutblocks, studyArea)
+  if (terra::nrow(potentialCutblocks) > 0) {
+    if (!"Potential" %in% names(potentialCutblocks)) potentialCutblocks$Potential <- 1L
+    if (!"ORIGIN" %in% names(potentialCutblocks))   potentialCutblocks$ORIGIN   <- 1900L
+  }
+  
+  list(
+    repo_root = repo_root,
+    studyArea = studyArea,
+    raster = rasterToMatch,
+    cutblocks = cutblocks,
+    potentialCutblocks = potentialCutblocks,
+    target_crs = target_crs
+  )
+}
