@@ -37,9 +37,16 @@ generateDisturbances <- function(disturbanceParameters,
     unDL <- unlist(disturbanceList)
     allCurrentDistLayNames <- names(unDL)[!grepl(x = names(unDL), pattern = "potential")]
     currDist <- unDL[names(unDL) %in% allCurrentDistLayNames]
-    # Combine all layers, both polygons and lines, separtely
+    # Combine all layers, both polygons and lines, separately
     linesLays <- currDist[sapply(currDist, geomtype) == "lines"]
-    polyLays <- currDist[sapply(currDist, geomtype) == "polygons"]
+    polyLays  <- currDist[sapply(currDist, geomtype) == "polygons"]
+    # Drop zero-row vectors to avoid empty rbind()
+    if (length(linesLays)) {
+      linesLays <- Filter(function(x) inherits(x, "SpatVector") && tryCatch(nrow(x) > 0L, error = function(...) FALSE), linesLays)
+    }
+    if (length(polyLays)) {
+      polyLays <- Filter(function(x) inherits(x, "SpatVector") && tryCatch(nrow(x) > 0L, error = function(...) FALSE), polyLays)
+    }
     # Buffer lines at the resolution of the rasterToMatch to convert them to polys.
     # This is not the ideal resolution, but as we are NOT deriving the buffered disturbances
     # from this layer but just using it to avoid choosing pixels already chosen, then it should
@@ -47,14 +54,24 @@ generateDisturbances <- function(disturbanceParameters,
     # NOTE: We devide the res by 2 so the total around is exactly the resolution of a pixel,
     # as the buffer uses the width on all sides.
 
-    linesLays <- unlist(lapply(linesLays, function(X){
-      terra::buffer(x = X, width = res(rasterToMatch)[1]/2)
-      # Here we need to buffer as this layer will be used to avoid specific pixels (i.e., already 
-      # disturbed!) to be selected for new disturbances.
-    }))
-    linesAndPolys <- do.call(what = c, list(polyLays, linesLays))
-    names(linesAndPolys) <- NULL
-    allLays <- do.call(rbind, linesAndPolys)
+    # Buffer existing lines (if any) and combine with polygons; be robust to empty lists
+    if (length(linesLays)) {
+      linesLays <- lapply(linesLays, function(X) {
+        terra::buffer(x = X, width = res(rasterToMatch)[1]/2)
+      })
+    }
+    if (!length(polyLays) && !length(linesLays)) {
+      message("No current disturbances found in study area; skipping generation for this year.")
+      return(currentDisturbanceLayer)
+    }
+    linesAndPolys <- c(polyLays, linesLays)
+    if (length(linesAndPolys) == 0L) {
+      allLays <- NULL
+    } else if (length(linesAndPolys) == 1L) {
+      allLays <- linesAndPolys[[1]]
+    } else {
+      allLays <- do.call(rbind, linesAndPolys)
+    }
   } else {
     if (is(currentDisturbanceLayer, "RasterLayer"))
       allLaysRas <- terra::rast(currentDisturbanceLayer) else
@@ -83,16 +100,21 @@ generateDisturbances <- function(disturbanceParameters,
     # Create allLaysRas, which is the disturbance raster with all disturbances rasterized, with
     # value == 1 for the disturbed pixels. Non-disturbed pixels are NA
   }
-  # Now fasterize all polys
-  allLaysSF <- sf::st_as_sf(x = allLays)
-  allLaysSF$Polys <- 1
-  polysField <- "Polys"
-  message("Fasterizing disturbances...")
-  rasterToMatchR <- rasterToMatchR
-  allLaysRas <- fasterize::fasterize(sf = st_collection_extract(allLaysSF, "POLYGON"),
-                                     raster = rasterToMatchR, 
-                                     field = polysField)
-  allLaysRas <- rast(allLaysRas)
+  # Now fasterize all polys if available
+  allLaysRas <- NULL
+  if (!is.null(allLays) && inherits(allLays, "SpatVector") && tryCatch(nrow(allLays) > 0L, error = function(...) FALSE)) {
+    allLaysSF <- sf::st_as_sf(x = allLays)
+    if (nrow(allLaysSF) > 0L) {
+      allLaysSF$Polys <- 1
+      polysField <- "Polys"
+      message("Fasterizing disturbances...")
+      rasterToMatchR <- rasterToMatchR
+      allLaysRas <- fasterize::fasterize(sf = st_collection_extract(allLaysSF, "POLYGON"),
+                                         raster = rasterToMatchR,
+                                         field = polysField)
+      allLaysRas <- rast(allLaysRas)
+    }
+  }
   
 
   # FIRST: Enlarging

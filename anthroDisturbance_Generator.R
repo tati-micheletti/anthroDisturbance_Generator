@@ -25,8 +25,8 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
-  reqdPkgs = list("SpaDES.core (>= 2.1.5.9003)", "ggplot2", "googledrive",
-                  "data.table", "PredictiveEcology/reproducible",
+  reqdPkgs = list("SpaDES.core", "ggplot2", "googledrive",
+                  "data.table", "reproducible",
                   "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
                   "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm",
                   "foreach", "doParallel", "digest"), #TODO review needed packages.
@@ -197,6 +197,9 @@ defineModule(sim, list(
                     paste0("Suffix indicating the years compared for the",
                            "difference calculation of disturbances rate. Needs to be ",
                            "in the format OLDYEAR_NEWYEAR")),
+    defineParameter("verboseDiagnostics", "logical", FALSE, NA, NA,
+                    paste0("If TRUE, prints a per-class diagnostics table each decade with ",
+                           "origin/potential presence, rate and size flags to help debug gating.")),
     defineParameter("archiveNEW", "character", paste0("ECCC_2015_anthro_dist_corrected_to_NT1_2016",
                                                       "_final.zip"), NA, NA,
                     "Filename of the newer archive dataset (zip file)."),
@@ -537,6 +540,10 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                    targetFileOLD = P(sim)$targetFileOLD,
                                                    urlOLD = P(sim)$urlOLD
                                                    )
+      if (isTRUE(P(sim)$verboseDiagnostics)) {
+        # emit a concise diagnostics report after rates are determined
+        try(writeDiagnostics(sim), silent = TRUE)
+      }
     },
     generatingDisturbances = {
       
@@ -585,6 +592,11 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                     endTime = end(sim),
                                     disturbanceParameters = sim$disturbanceParameters)
       }
+      # emit a diagnostics snapshot at the beginning of the decade if requested
+      if (isTRUE(P(sim)$verboseDiagnostics)) {
+        try(writeDiagnostics(sim, scheduledIdx = mod$.whichToRun), silent = TRUE)
+      }
+
       if (length(mod$.whichToRun) != 0){ # If anything is scheduled
         # subset to include only scheduled disturbances to generate
         dpar_run <- sim$disturbanceParameters[mod$.whichToRun]
@@ -731,9 +743,14 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   }
   
   if (!suppliedElsewhere(object = "disturbanceParameters", sim = sim)) {
-    sim$disturbanceParameters <- data.table(dget(file = paste0("https://raw.githubusercontent.com",
-                                                               "/tati-micheletti/anthroDisturbance_Generator",
-                                                               "/refs/heads/main/data/paramsGeneral.txt")))
+    localParam <- file.path(modulePath(sim), currentModule(sim), "data", "paramsGeneral.txt")
+    if (file.exists(localParam)) {
+      sim$disturbanceParameters <- data.table(dget(file = localParam))
+    } else {
+      sim$disturbanceParameters <- data.table(dget(file = paste0("https://raw.githubusercontent.com",
+                                                                 "/tati-micheletti/anthroDisturbance_Generator",
+                                                                 "/refs/heads/main/data/paramsGeneral.txt")))
+    }
     # Example Disturbance Parameters for the whole NT1
     # sim$disturbanceParameters <- prepInputs(url = extractURL("disturbanceParameters"),
     #                                         targetFile = "disturbanceParameters.csv",
@@ -796,4 +813,3 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   }
   return(invisible(sim))
 }
-

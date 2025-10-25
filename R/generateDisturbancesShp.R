@@ -62,16 +62,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
       updatedL <- lapply(whichOrigin, function(ORIGIN) {
         Lay <- disturbanceList[[Sector]][[ORIGIN]]
         if (is.null(Lay)) {
-          stop(
+          message(
             paste0(
-              "Layer of dataName = ",
-              Sector,
-              " and disturbanceOrigin = ",
-              ORIGIN,
-              " needs to exist in disturbanceList"
+              "Layer of dataName = ", Sector,
+              " and disturbanceOrigin = ", ORIGIN,
+              " is missing; skipping Enlarging for this class."
             )
           )
-        } # Bug catch for mismatches between disturbanceOrigin and the layers
+          return(NULL)
+        } # gracefully skip if no current layer available for enlarging
         # available
         dParOri <- dPar[dataName == Sector & disturbanceOrigin == ORIGIN,]
         # Select the growth rate. For Enlarging we simply buffer the current layer at the percent
@@ -236,7 +235,14 @@ generateDisturbancesShp <- function(disturbanceParameters,
   }
   RES <- RES[1]
   if (!is.finite(RES) || RES <= 0) RES <- 7.5
-  
+  toSpat <- function(x) {
+    if (inherits(x, "SpatVector")) return(x)
+    if (inherits(x, "sf")) return(terra::vect(x))
+    x
+  }
+  hasFeatures <- function(x) inherits(x, "SpatVector") &&
+    tryCatch(terra::nrow(x) > 0L, error = function(...) FALSE)
+
   if (is.null(currentDisturbanceLayer)){
     message(paste0("currentDisturbanceLayer is NULL. This is likely the first year of the",
                    " simulation. Creating current disturbed polygons..."))
@@ -252,17 +258,56 @@ generateDisturbancesShp <- function(disturbanceParameters,
     unDL <- unDL[ validNames ]
     # from those, keep only spatial objects (drop numerics, etc.)
     currDist <- Filter(function(x) inherits(x, c("SpatVector", "sf", "Spatial", "RasterLayer", "SpatRaster")), unDL)
-    # Combine all layers, both polygons and lines, separtely
+    # Combine all layers, both polygons and lines, separately
     linesLays <- currDist[sapply(currDist, geomtype) == "lines"]
     polyLays  <- currDist[sapply(currDist, geomtype) == "polygons"]
-    linesLays <- unlist(lapply(linesLays, function(X){
-      terra::buffer(x = X, width = RES)
-      # Here we need to buffer as this layer will be used to avoid specific locations (i.e., already 
-      # disturbed!) to be selected for new disturbances.
-    }))
-    linesAndPolys <- do.call(what = c, list(polyLays, linesLays))
-    names(linesAndPolys) <- NULL
-    allLays <- do.call(rbind, linesAndPolys)
+    # Drop zero-row layers to avoid empty rbind() calls
+    if (length(linesLays)) {
+      linesLays <- Filter(function(x) {
+        inherits(x, "SpatVector") && tryCatch(nrow(x) > 0L, error = function(...) FALSE)
+      }, linesLays)
+    }
+    if (length(polyLays)) {
+      polyLays <- Filter(function(x) {
+        inherits(x, "SpatVector") && tryCatch(nrow(x) > 0L, error = function(...) FALSE)
+      }, polyLays)
+    }
+    if (length(linesLays)) {
+      linesLays <- lapply(linesLays, function(X) {
+        X <- toSpat(X)
+        if (inherits(X, "SpatVector")) terra::buffer(x = X, width = RES) else X
+      })
+    }
+    polyLays  <- lapply(polyLays, toSpat)
+    hasFeatures <- function(x) inherits(x, "SpatVector") &&
+      tryCatch(terra::nrow(x) > 0L, error = function(...) FALSE)
+    linesLays <- Filter(hasFeatures, linesLays)
+    polyLays  <- Filter(hasFeatures, polyLays)
+    if (!length(polyLays) && !length(linesLays)) {
+      # No current disturbances — proceed with generation using full potential
+      allLays <- NULL
+    } else {
+      linesAndPolys <- Filter(Negate(is.null), c(polyLays, linesLays))
+      if (length(linesAndPolys)) {
+        msgClasses <- paste(vapply(linesAndPolys, function(x) paste(class(x), collapse = "/"), character(1)), collapse = ", ")
+        message("Combining current disturbance layers (", length(linesAndPolys), ") classes: ", msgClasses)
+      }
+      if (length(linesAndPolys) == 0L) {
+        allLays <- NULL
+      } else {
+        sfList <- lapply(linesAndPolys, function(x) {
+          if (inherits(x, "SpatVector")) x <- sf::st_as_sf(x)
+          if (inherits(x, "sf")) x[, 0, drop = FALSE] else NULL
+        })
+        sfList <- Filter(function(x) inherits(x, "sf") && nrow(x) > 0L, sfList)
+        if (!length(sfList)) {
+          allLays <- NULL
+        } else {
+          combinedSF <- do.call(rbind, sfList)
+          allLays <- terra::vect(combinedSF)
+        }
+      }
+    }
   } else {
     if (is(currentDisturbanceLayer, "RasterLayer"))
       allLaysRas <- terra::rast(currentDisturbanceLayer) else
@@ -285,7 +330,23 @@ generateDisturbancesShp <- function(disturbanceParameters,
               return(buffVect)
             })
             names(curDistVcsAll) <- NULL
-            allLays <- do.call(rbind, curDistVcsAll)
+            curDistVcsAll <- lapply(curDistVcsAll, toSpat)
+            curDistVcsAll <- Filter(hasFeatures, curDistVcsAll)
+            if (!length(curDistVcsAll)) {
+              allLays <- NULL
+            } else {
+              sfList <- lapply(curDistVcsAll, function(x) {
+                if (inherits(x, "SpatVector")) x <- sf::st_as_sf(x)
+                if (inherits(x, "sf")) x[, 0, drop = FALSE] else NULL
+              })
+              sfList <- Filter(function(x) inherits(x, "sf") && nrow(x) > 0L, sfList)
+              if (!length(sfList)) {
+                allLays <- NULL
+              } else {
+                message("Combining existing disturbance vectors (", length(sfList), ")")
+                allLays <- terra::vect(do.call(rbind, sfList))
+              }
+            }
           }
         # Create allLaysRas, which is the disturbance raster with all disturbances rasterized, with
         # value == 1 for the disturbed pixels. Non-disturbed pixels are NA
@@ -332,7 +393,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
             message(paste0("Generating disturbance for forestry. Updating potential layer for ",
                            "occurred fires and currently productive forest for year ", currentTime))
             
-            # guard against emtpy layers
+            # guard against empty layers
             if (is.null(potLay) || (inherits(potLay, "SpatVector") && terra::nrow(potLay) == 0)) {
               message("Forestry: potential layer is empty or missing; skipping forestry generation for this year.")
               return(NULL)
@@ -340,28 +401,77 @@ generateDisturbancesShp <- function(disturbanceParameters,
             
             # First: Select only productive forests
             # Previous pixel strategy for Generating Disturbances
-            # 2. Fasterize it
-            potLaySF <- sf::st_as_sf(x = potLay)
             potField <- dParOri[["potentialField"]]
-            
             if (any(is.na(potField), 
                     potField == "",
                     is.null(potField))){ 
               # If NA, it doesn't matter, but need to create a 
               # field so not the whole thing becomes one big 1 map
               potField <- "Potential"
-              potLaySF$Potential <- 1
+              potLay[["Potential"]] <- 1
             }
-            potLaySF <- subset(potLaySF, potLaySF$ORIGIN < (currentTime - 50))
-            potLayF <- fasterize::fasterize(sf = st_collection_extract(potLaySF, "POLYGON"),
-                                            raster = rasterToMatchR, field = potField)
+            if (!potField %in% names(potLay)) {
+              potLay[[potField]] <- 1
+            }
+            validIdx <- which(!is.na(potLay$ORIGIN) & potLay$ORIGIN < (currentTime - 50))
+            if (!length(validIdx)) {
+              message("Forestry: no features within the ORIGIN window; skipping for this year.")
+              return(NULL)
+            }
+            potLay <- potLay[validIdx]
+            areas <- tryCatch(terra::expanse(potLay, unit = "m", transform = FALSE), error = function(e) NA_real_)
+            if (any(is.na(areas) | areas <= 0)) {
+              dropIdx <- which(is.na(areas) | areas <= 0)
+              if (length(dropIdx))
+                potLay <- potLay[-dropIdx]
+            }
+            if (terra::nrow(potLay) == 0) {
+              message("Forestry: no polygons remain after removing zero-area features; skipping for this year.")
+              return(NULL)
+            }
+            potVals <- tryCatch(terra::values(potLay, mat = FALSE)[[potField]], error = function(e) NULL)
+            if (is.null(potVals)) potVals <- rep(1, terra::nrow(potLay))
+            if (is.list(potVals)) {
+              potVals <- vapply(potVals, function(x) {
+                if (length(x)) {
+                  suppressWarnings(as.numeric(x[[1]]))
+                } else {
+                  NA_real_
+                }
+              }, numeric(1))
+            }
+            potValsNum <- suppressWarnings(as.numeric(potVals))
+            if (all(is.na(potValsNum))) {
+              potValsNum <- rep(1, terra::nrow(potLay))
+            } else if (any(is.na(potValsNum))) {
+              potValsNum[is.na(potValsNum)] <- 0
+            }
+            potLay[[potField]] <- potValsNum
+            
+            potLayF <- tryCatch(
+              terra::rasterize(potLay, terra::rast(rasterToMatchR), field = potField,
+                               background = NA, touches = TRUE),
+              error = function(e) {
+                message(paste("Forestry: rasterize failed ->", conditionMessage(e),
+                              "Skipping forestry generation this iteration."))
+                return(NULL)
+              }
+            )
+            if (is.null(potLayF)) return(NULL)
             # Second: remove fires
-            if (!is.null(fires))
-              potLayF[fires[] == 1] <- NA
+            if (!is.null(fires)) {
+              fireVals <- tryCatch(fires[], error = function(e) NULL)
+              if (!is.null(fireVals)) {
+                potVals <- potLayF[]
+                burnMask <- fireVals == 1
+                if (any(burnMask, na.rm = TRUE)) {
+                  potVals[burnMask & !is.na(burnMask)] <- NA
+                  potLayF[] <- potVals
+                }
+              }
+            }
             # Convert the fire raster to polygons
-            potLayT <- rast(potLayF)
-            #potLay <- terra::as.polygons(potLayT)
-            potLay <- terra::as.polygons(potLayT, values = TRUE, na.rm = TRUE)
+            potLay <- terra::as.polygons(potLayF, values = TRUE, na.rm = TRUE)
             
             #safe exit if nothing left ----
             if (terra::nrow(potLay) == 0) {
@@ -885,7 +995,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                   cropLayAg <- aggregate(cropLayBuf, dissolve = TRUE)
                   finalPotLay <- erase(potLayTopValid, cropLayAg)
                   centerPointToAdd <- terra::spatSample(finalPotLay, size = howManyMissing, method = "random")
-                  centerPoint <- rbind(centerPoint, centerPointToAdd)
+                  centerPoint <- if (is.null(centerPoint)) centerPointToAdd else rbind(centerPoint, centerPointToAdd)
                 }
                 # 5. Draw the new grid based on the total length expected
                 # 5.1. Draw a square based on the centerPoint, where the distance from point to the lines 
@@ -915,7 +1025,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                     theLine <- as.lines(gridPoints[thePair, ])
                     return(theLine)
                   })
-                  rowsOfPoints <- do.call(rbind, rowsOfPointsL)
+                  rowsOfPoints <- if (length(rowsOfPointsL)) do.call(rbind, rowsOfPointsL) else NULL
                   # Cols:
                   colsOfPointsL <- lapply(0:(dim(polRas)[1]-1), function(colIndex){
                     thePair <- c(1, dim(polRas)[2])+(colIndex*dim(polRas)[2])
@@ -923,7 +1033,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                     theLine <- as.lines(gridPoints[thePair, ])
                     return(theLine)
                   })
-                  colsOfPoints <- do.call(rbind, colsOfPointsL)
+                  colsOfPoints <- if (length(colsOfPointsL)) do.call(rbind, colsOfPointsL) else NULL
                   # Now we do 0 to two random crossing lines
                   howManyCross <- sample(x = seq(0, 2), size = 1)
                   if (howManyCross > 0){
@@ -944,14 +1054,19 @@ generateDisturbancesShp <- function(disturbanceParameters,
                       theLine <- as.lines(gridPoints[thePair, ])
                       return(theLine)
                     })
-                    crossedLines <- do.call(rbind, crossLines)
+                    crossedLines <- if (length(crossLines)) do.call(rbind, crossLines) else NULL
                   } else {
                     crossedLines <- howManyCross <- NULL
                   }
-                  gridReady <- do.call(rbind, list(rowsOfPoints, colsOfPoints, crossedLines))# Is the newly created grid
-                  return(gridReady)
+                  parts <- Filter(Negate(is.null), list(rowsOfPoints, colsOfPoints, crossedLines))
+                  if (length(parts)) {
+                    gridReady <- do.call(rbind, parts) # Newly created grid
+                    return(gridReady)
+                  } else {
+                    return(NULL)
+                  }
                 })
-                gridReadyB <- do.call(rbind, gridReady)
+                gridReadyB <- if (length(gridReady)) do.call(rbind, gridReady) else NULL
                 # newDist NEEDS to be buffered, first by 3m and then by by 500m, if disturbanceRateRelatesToBufferedArea 
                 # Although dParOri[["resolutionVector"]] has vector resolution, seismic lines are much slimmer.
                 # In the past, they used to be placed 300–500 m apart, and 5–10 m wide. 
@@ -1040,7 +1155,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
             if (IT == 1){
               newDisturbs <- newDist
             } else {
-              newDisturbs <- rbind(newDisturbs, newDist)
+              newDisturbs <- if (is.null(newDisturbs)) newDist else rbind(newDisturbs, newDist)
             }
             IT <- IT + 1
           }
@@ -1213,11 +1328,11 @@ generateDisturbancesShp <- function(disturbanceParameters,
             connectedOne <- terra::vect(connectedOne)
           }
           if (exists("connected", inherits = FALSE)){
-            connected <- rbind(connected, connectedOne)
+            connected <- if (is.null(connected)) connectedOne else rbind(connected, connectedOne)
           } else {
             connected <- connectedOne
           }
-          endLay <- rbind(endLay, connectedOne)
+          endLay <- if (is.null(endLay)) connectedOne else rbind(endLay, connectedOne)
         }          
       } else {
         if (isTRUE(useRoadsPackage) || (isTRUE(maskWaterAndMountainsFromLines) && is.null(featuresToAvoid))) {
@@ -1356,11 +1471,11 @@ generateDisturbancesShp <- function(disturbanceParameters,
               connectedOne <- terra::vect(connectedOne)
             }
             if (exists("connected")){
-              connected <- rbind(connected, connectedOne)
+              connected <- if (is.null(connected)) connectedOne else rbind(connected, connectedOne)
             } else {
               connected <- connectedOne
             }
-            endLay <- rbind(endLay, connectedOne)
+            endLay <- if (is.null(endLay)) connectedOne else rbind(endLay, connectedOne)
           }
           message(paste0("For loop for ", Sector," -- ", disturbanceEnd, " finished."))
         }
@@ -1410,7 +1525,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                      "This has not been extensively tested and might fail!"),immediate. = TRUE)
       merged <- list(NULL)
     } else {
-      merged <- list(do.call(rbind, toMerge)) 
+      merged <- list(if (length(toMerge)) do.call(rbind, toMerge) else NULL)
     }
     names(merged) <- names(Connected[whichSectorHasMoreThanOne]) # Second level
     merged <- list(merged) # First level
