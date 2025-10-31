@@ -7,6 +7,36 @@ replaceListFast <- function(disturbanceList,
   correctMatching <- match(names(updatedLayers), names(disturbanceList))
   cleanedNames <- names(disturbanceList)[unique(sort(correctMatching))]
   externalLays <- lapply(unique(sort(correctMatching)), function(INDEX) {
+    safeRbind <- function(lhs, rhs, contextTag) {
+      tryCatch(
+        rbind(lhs, rhs),
+        error = function(e) {
+          lhsGeom <- tryCatch(paste(unique(terra::geomtype(lhs)), collapse = "/"), error = function(...) "NA")
+          rhsGeom <- tryCatch(paste(unique(terra::geomtype(rhs)), collapse = "/"), error = function(...) "NA")
+          lhsClass <- paste(class(lhs), collapse = "/")
+          rhsClass <- paste(class(rhs), collapse = "/")
+          debugDir <- file.path(normalizePath(".", winslash = "/", mustWork = FALSE), "scratch", "debug")
+          dir.create(debugDir, showWarnings = FALSE, recursive = TRUE)
+          dumpPath <- file.path(debugDir, paste0("replaceFail_", contextTag, ".rds"))
+          dumpObj <- list(lhs = lhs, rhs = rhs, lhsGeom = lhsGeom, rhsGeom = rhsGeom,
+                          lhsClass = lhsClass, rhsClass = rhsClass, error = conditionMessage(e))
+          saveRDS(dumpObj, dumpPath)
+          message("replaceListFast: rbind failed in context ", contextTag,
+                  "; lhs geom=", lhsGeom, " rhs geom=", rhsGeom,
+                  "; lhs class=", lhsClass, " rhs class=", rhsClass,
+                  "; dump=", dumpPath, "; error=", conditionMessage(e))
+          stop(e)
+        }
+      )
+    }
+    alignEmptyGeom <- function(vec, template) {
+      if (!inherits(vec, "SpatVector")) return(vec)
+      if (!inherits(template, "SpatVector")) return(vec)
+      if (nrow(vec) == 0 && nrow(template) > 0) {
+        vec <- template[0, ]
+      }
+      vec
+    }
     Sector <- names(disturbanceList)[INDEX]
     updatedLayerIndex <- which(correctMatching == INDEX)
     # Each sector might have more than one disturbance type. We don't need to
@@ -108,35 +138,67 @@ replaceListFast <- function(disturbanceList,
                 currDist[["createdInSimulationTime"]] <- currentTime
               }
             }
-            unified <- rbind(pastDist, currDist)
+            wid <- 0.0000000003
+            if (nrow(pastDist) > 0 && !all(terra::geomtype(pastDist) == "polygons")) {
+              pastDistBuf <- terra::buffer(pastDist, width = wid)
+              while (any(is.na(as.vector(terra::ext(pastDistBuf))))) {
+                wid <- wid + wid
+                pastDistBuf <- terra::buffer(pastDist, width = wid)
+              }
+              pastDist <- pastDistBuf
+            }
+            if (nrow(currDist) > 0 && !all(terra::geomtype(currDist) == "polygons")) {
+              currDistBuf <- terra::buffer(currDist, width = wid)
+              while (any(is.na(as.vector(terra::ext(currDistBuf))))) {
+                wid <- wid + wid
+                currDistBuf <- terra::buffer(currDist, width = wid)
+              }
+              currDist <- currDistBuf
+            }
+            pastDist <- alignEmptyGeom(pastDist, currDist)
+            currDist <- alignEmptyGeom(currDist, pastDist)
+            contextTag <- paste0(Sector, "_", layName, "_classAdjust")
+            unified <- safeRbind(pastDist, currDist, contextTag)
           } else {
             # Objects share the same class and vectors
-            if (geomtype(pastDist) != geomtype(currDist)) { # Works only if both are vectors!
-              # Make sure that all are buffered, even if just a little
+          pastGeomTypes <- tryCatch(unique(terra::geomtype(pastDist)), error = function(...) character(0))
+          currGeomTypes <- tryCatch(unique(terra::geomtype(currDist)), error = function(...) character(0))
+            if (!setequal(pastGeomTypes, currGeomTypes)) {
+              # Try buffering non-polygon geometries to polygons so rbind can succeed
               wid <- 0.0000000003
-              if (nrow(pastDist) > 0 && geomtype(pastDist) != "polygons") {
+              if (nrow(pastDist) > 0 && !all(terra::geomtype(pastDist) == "polygons")) {
                 pastDistBuf <- terra::buffer(pastDist, width = wid)
-                while (any(is.na(as.vector(ext(pastDistBuf))))) {
-                  message(paste0("Minimum buffering size current disturbances (", wid, 
-                                 ") failed. Increasing buffering size..."))
+                while (any(is.na(as.vector(terra::ext(pastDistBuf))))) {
+                  message("Minimum buffering size current disturbances (", wid, ") failed. Increasing buffering size...")
                   wid <- wid + wid
                   pastDistBuf <- terra::buffer(pastDist, width = wid)
                 }
                 pastDist <- pastDistBuf
               }
-              if (nrow(currDist) > 0 && geomtype(currDist) != "polygons") {
+              if (nrow(currDist) > 0 && !all(terra::geomtype(currDist) == "polygons")) {
                 currDistBuf <- terra::buffer(currDist, width = wid)
-                while (any(is.na(as.vector(ext(currDistBuf))))) {
-                  message(paste0("Minimum buffering size for past disturbances (", wid,
-                                 ") failed. Increasing buffering size..."))
+                while (any(is.na(as.vector(terra::ext(currDistBuf))))) {
+                  message("Minimum buffering size for past disturbances (", wid, ") failed. Increasing buffering size...")
                   wid <- wid + wid
                   currDistBuf <- terra::buffer(currDist, width = wid)
                 }
                 currDist <- currDistBuf
               }
+              pastGeomTypes <- tryCatch(unique(terra::geomtype(pastDist)), error = function(...) character(0))
+              currGeomTypes <- tryCatch(unique(terra::geomtype(currDist)), error = function(...) character(0))
             }
+            pastDist <- alignEmptyGeom(pastDist, currDist)
+            currDist <- alignEmptyGeom(currDist, pastDist)
             tictoc::tic(paste0("Elapsed time for merging ", layName, " (", Sector, ")"))
-            unified <- rbind(pastDist, currDist) # Doubles the features when we need to overlay/unify these
+            message(
+              "replaceListFast merging sector ", Sector, " layer ", layName,
+              "; past geom types=", paste(pastGeomTypes, collapse = "/"),
+              ", curr geom types=", paste(currGeomTypes, collapse = "/"),
+              "; past nrow=", if (is.null(pastDist)) NA_integer_ else nrow(pastDist),
+              ", curr nrow=", if (is.null(currDist)) NA_integer_ else nrow(currDist)
+            )
+          contextTag <- paste0(Sector, "_", layName, "_geomMatch")
+          unified <- safeRbind(pastDist, currDist, contextTag)
             # But that is not a problem per se. In fact, we might want to see all geometries!
             if (!"Class" %in% names(currDist)) {
               if ("Class" %in% names(pastDist)) {

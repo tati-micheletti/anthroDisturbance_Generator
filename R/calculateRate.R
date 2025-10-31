@@ -24,9 +24,23 @@ calculateRate <- function(disturbanceParameters,
     return(disturbanceParameters)
   }
   
-  if (all(!is.null(DisturbanceRate), !is.null(totalDisturbanceRate)))
+  isEmptyInput <- function(x) {
+    if (is.null(x)) return(TRUE)
+    if (is.atomic(x) && length(x) == 0) return(TRUE)
+    if (is.list(x) && length(x) == 0) return(TRUE)
+    if (is.data.frame(x) && nrow(x) == 0) return(TRUE)
+    FALSE
+  }
+  hasDisturbanceRate <- !isEmptyInput(DisturbanceRate)
+  if (hasDisturbanceRate && !is.null(totalDisturbanceRate))
     stop("Both DisturbanceRate and totalDisturbanceRate were provided. Please provide only one,",
          "or none.")
+  if (isTRUE(getOption("anthroDisturbance.debugRate", FALSE))) {
+    message("[calculateRate] hasDisturbanceRate=", hasDisturbanceRate,
+            "; DisturbanceRate class=", paste(class(DisturbanceRate), collapse = ":"),
+            "; totalDisturbanceRate=", paste(totalDisturbanceRate, collapse = ","))
+  }
+  if (!hasDisturbanceRate) DisturbanceRate <- NULL
   
   # Subsetting parameters to update
   dP <- disturbanceParameters[whichToUpdate, ]

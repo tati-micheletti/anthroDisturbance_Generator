@@ -91,7 +91,7 @@ test_that("applies user-supplied DisturbanceRate correctly and preserves other f
 
 # 3. Layer absent leads to row being dropped when a dummy DisturbanceRate is supplied (bypassing ECCC fetch)
 #    Also checks zero-length list is treated same as NULL
-test_that("skips updating when the disturbance layer is NULL or empty list", {
+test_that("keeps disturbance row when layer is NULL or empty list", {
   params <- params_template()
   # supply a non-null DisturbanceRate stub to skip empirical ECCC block
   stubRates <- data.table(
@@ -102,7 +102,8 @@ test_that("skips updating when the disturbance layer is NULL or empty list", {
     disturbanceRate   = NA_real_
   )
   for (lay in list(NULL, list())) {
-    result <- calculateRate(
+    expect_message(
+      result <- calculateRate(
       disturbanceParameters             = params,
       disturbanceDT                     = disturbanceDT,
       disturbanceList                   = list(dn1 = list(orig1 = lay)),
@@ -121,8 +122,13 @@ test_that("skips updating when the disturbance layer is NULL or empty list", {
       archiveOLD                          = NULL,
       targetFileOLD                       = NULL,
       urlOLD                              = NULL
+    ),
+    "No current 'orig1' layer in AOI; proceeding with supplied DisturbanceRate"
     )
-    expect_equal(nrow(result), 0)
+
+    expect_equal(nrow(result), nrow(params))
+    expect_equal(result[, names(params), with = FALSE], params)
+    expect_true(all(is.na(result$disturbanceRate)))
   }
 })
 
@@ -637,7 +643,7 @@ test_that("final rate message includes correct total", {
 })
 
 # 15. DisturbanceRate provided but layer absent (should drop disturbance)
-test_that("drops disturbance when layer absent but DisturbanceRate provided", {
+test_that("uses supplied DisturbanceRate even when layer is absent", {
   params <- params_template()
   override <- data.table(
     dataName          = "dn1",
@@ -647,28 +653,35 @@ test_that("drops disturbance when layer absent but DisturbanceRate provided", {
     disturbanceRate   = 7.5
   )
   
-  result <- calculateRate(
-    disturbanceParameters           = params,
-    disturbanceList                 = list(dn1 = list(orig1 = NULL)),  # Layer absent
-    DisturbanceRate                 = override,
-    disturbanceDT                   = disturbanceDT,
-    whichToUpdate                   = 1L,
-    RTM                             = rast_template(),
-    studyArea                       = create_study_area(),
-    destinationPath                 = tempdir(),
-    totalDisturbanceRate            = NULL, 
-    diffYears                       = "2010_2015",
-    disturbanceRateRelatesToBufferedArea = FALSE,
-    maskOutLinesFromPolys           = FALSE,
-    aggregateSameDisturbances       = FALSE,
-    archiveNEW                      = NULL,
-    targetFileNEW                   = NULL,
-    urlNEW                          = NULL,
-    archiveOLD                      = NULL,
-    targetFileOLD                   = NULL,
-    urlOLD                          = NULL   
+  expect_message(
+    result <- calculateRate(
+      disturbanceParameters           = params,
+      disturbanceList                 = list(dn1 = list(orig1 = NULL)),  # Layer absent
+      DisturbanceRate                 = override,
+      disturbanceDT                   = disturbanceDT,
+      whichToUpdate                   = 1L,
+      RTM                             = rast_template(),
+      studyArea                       = create_study_area(),
+      destinationPath                 = tempdir(),
+      totalDisturbanceRate            = NULL, 
+      diffYears                       = "2010_2015",
+      disturbanceRateRelatesToBufferedArea = FALSE,
+      maskOutLinesFromPolys           = FALSE,
+      aggregateSameDisturbances       = FALSE,
+      archiveNEW                      = NULL,
+      targetFileNEW                   = NULL,
+      urlNEW                          = NULL,
+      archiveOLD                      = NULL,
+      targetFileOLD                   = NULL,
+      urlOLD                          = NULL   
+    ),
+    "No current 'orig1' layer in AOI; proceeding with supplied DisturbanceRate"
   )
-  expect_equal(nrow(result), 0)  # Should be dropped
+
+  key <- params[ , .(dataName, dataClass, disturbanceType, disturbanceOrigin)]
+  updated <- result[key, on = names(key)]
+  expect_equal(nrow(updated), nrow(params))
+  expect_equal(updated$disturbanceRate, override$disturbanceRate)
 })
 
 # 16. DisturbanceRate table missing matching row (should error)

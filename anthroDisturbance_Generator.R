@@ -432,13 +432,22 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
-      # Make sure siteSelectionAsDistributing is either 
-      if (!P(sim)$siteSelectionAsDistributing %in% c(NA, unique(sim$disturbanceParameters$disturbanceOrigin)))
-        stop(paste0("Only disturbances provided in disturbanceOrigin column of object ",
-                    "disturbanceParameters are accepted for parameter siteSelectionAsDistributing. ",
-                    "Please provide NA or any combination of the following: ", 
-                    paste(unique(sim$disturbanceParameters$disturbanceOrigin), collapse = ", ")
-        ))
+      siteSel <- P(sim)$siteSelectionAsDistributing
+      if (!is.null(siteSel)) {
+        siteSel <- siteSel[!(is.na(siteSel) | siteSel %in% c("", "NA"))]
+        if (length(siteSel)) {
+          validOrigins <- unique(sim$disturbanceParameters$disturbanceOrigin)
+          invalid <- setdiff(siteSel, validOrigins)
+          if (length(invalid)) {
+            stop(paste0(
+              "Only disturbances provided in disturbanceParameters$disturbanceOrigin are accepted for ",
+              "parameter siteSelectionAsDistributing. Invalid entries: ",
+              paste(invalid, collapse = ", "), ". Valid options are: ",
+              paste(validOrigins, collapse = ", ")
+            ))
+          }
+        }
+      }
       
       # Make sure RTM and studyArea projections match
       sim$studyArea <- projectInputs(sim$studyArea, 
@@ -460,18 +469,19 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       sim$currentDisturbanceLayer <- list()
       
       ### Make sure that growthStepEnlargingLines and growthStepEnlargingPolys are > 0
-      
-      if (P(sim)$growthStepEnlargingLines <= 0){
-        warning(paste0("growthStepEnlargingLines needs to be > 1 but is currently set to ", 
-                       P(sim)$growthStepEnlargingLines, ". Overriding it to 1"), immediate. = TRUE)
-        P(sim)$growthStepEnlargingLines <- 1
+      normalizeGrowthStep <- function(value, paramName) {
+        step <- suppressWarnings(as.numeric(value))
+        if (!is.finite(step) || step <= 0) {
+          warning(paste0(paramName, " needs to be > 0 but is currently set to ",
+                         value, ". Overriding it to 1"), immediate. = TRUE)
+          step <- 1
+        }
+        step
       }
-      
-      if (P(sim)$growthStepEnlargingPolys <= 0){
-        warning(paste0("growthStepEnlargingLines needs to be > 1 but is currently set to ", 
-                       P(sim)$growthStepEnlargingPolys, ". Overriding it to 1"), immediate. = TRUE)
-        P(sim)$growthStepEnlargingPolys <- 1
-      }
+      P(sim)$growthStepEnlargingLines <- normalizeGrowthStep(P(sim)$growthStepEnlargingLines,
+                                                             "growthStepEnlargingLines")
+      P(sim)$growthStepEnlargingPolys <- normalizeGrowthStep(P(sim)$growthStepEnlargingPolys,
+                                                             "growthStepEnlargingPolys")
       
       # Make sure the parameter diffYears has the correct format
       parts <- strsplit(P(sim)$diffYears, "_")[[1]] # [[1]] extracts the vector
@@ -519,7 +529,20 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       # Check for needed rates. If all provided, skip event
       mod$.whichNeedRates <- which(sim$disturbanceParameters[, disturbanceType %in% c("Generating", "Enlarging") &
                                                                is.na(disturbanceRate)])
-      if (length(mod$.whichNeedRates) != 0)
+      if (length(mod$.whichNeedRates) != 0) {
+        distRateArg <- sim$DisturbanceRate
+        if (!is.null(P(sim)$totalDisturbanceRate)) {
+          distRateArg <- NULL
+        } else if (!is.null(distRateArg)) {
+          isEmptyAtomic <- is.atomic(distRateArg) && length(distRateArg) == 0
+          isEmptyDf <- is.data.frame(distRateArg) && nrow(distRateArg) == 0
+          if (isEmptyAtomic || isEmptyDf) {
+            distRateArg <- NULL
+          } else if (!data.table::is.data.table(distRateArg) && !is.data.frame(distRateArg)) {
+            warning("DisturbanceRate supplied but not a table; ignoring this input.", immediate. = TRUE)
+            distRateArg <- NULL
+          }
+        }
         sim$disturbanceParameters <- calculateRate(disturbanceParameters = sim$disturbanceParameters,
                                                    whichToUpdate = mod$.whichNeedRates,
                                                    studyArea = sim$studyArea,
@@ -528,7 +551,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                    disturbanceDT = sim$disturbanceDT,
                                                    destinationPath = Paths[["inputPath"]],
                                                    totalDisturbanceRate = P(sim)$totalDisturbanceRate,
-                                                   DisturbanceRate = sim$DisturbanceRate,
+                                                   DisturbanceRate = distRateArg,
                                                    disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
                                                    maskOutLinesFromPolys = P(sim)$maskOutLinesFromPolys,
                                                    aggregateSameDisturbances = P(sim)$aggregateSameDisturbances,
@@ -539,7 +562,8 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                    archiveOLD = P(sim)$archiveOLD,
                                                    targetFileOLD = P(sim)$targetFileOLD,
                                                    urlOLD = P(sim)$urlOLD
-                                                   )
+        )
+      }
       if (isTRUE(P(sim)$verboseDiagnostics)) {
         # emit a concise diagnostics report after rates are determined
         try(writeDiagnostics(sim), silent = TRUE)
