@@ -584,7 +584,11 @@ generateDisturbances <- function(disturbanceParameters,
                            round(100*(round(nPixChosenTotal, 0)/round(expectedDistPixels, 0)), 2),"% achieved)"))
           }
           # This is the size in meter square that each disturbance should have
-          Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
+          expr <- dParOri[["disturbanceSize"]]
+          # Ensure truncated-normal sampling uses fully-qualified msm::rtnorm
+          expr <- gsub("(?<!msm::)rtnorm\\(", "msm::rtnorm(", expr, perl = TRUE)
+          expr <- gsub("msm::msm::", "msm::", expr, fixed = TRUE)
+          Size <- round(eval(parse(text = expr)), 0)
           # Here I generate one disturbance at a time. 
           # This is the size as the number of pixels to be chosen IN m2!
           # totNPix is the number of pixels that correspont to totalstudyAreaVAreaSqKm

@@ -55,7 +55,7 @@ test_that("calculateSize converts raster inputs correctly", {
                                  whichToUpdate = which(disturbanceParameters$dataClass == "rasterDisturbance"))
   
   expect_true(!is.na(updatedParams[dataClass == "rasterDisturbance", disturbanceSize]))
-  expect_true(grepl("rtnorm", updatedParams[dataClass == "rasterDisturbance", disturbanceSize]))
+  expect_true(grepl("msm::rtnorm", updatedParams[dataClass == "rasterDisturbance", disturbanceSize]))
 })
 
 # Remaining tests (unchanged)
@@ -78,7 +78,7 @@ test_that("calculateSize computes disturbanceSize correctly for polygon inputs",
                                  whichToUpdate = which(disturbanceParameters$dataClass == "potentialSettlements"))
   
   expect_true(!is.na(updatedParams[dataClass == "potentialSettlements", disturbanceSize]))
-  expect_true(grepl("rtnorm", updatedParams[dataClass == "potentialSettlements", disturbanceSize]))
+  expect_true(grepl("msm::rtnorm", updatedParams[dataClass == "potentialSettlements", disturbanceSize]))
 })
 
 test_that("calculateSize computes disturbanceSize correctly for line inputs", {
@@ -88,7 +88,7 @@ test_that("calculateSize computes disturbanceSize correctly for line inputs", {
                                  whichToUpdate = which(disturbanceParameters$dataClass == "potentialSeismicLines"))
   
   expect_true(!is.na(updatedParams[dataClass == "potentialSeismicLines", disturbanceSize]))
-  expect_true(grepl("rtnorm", updatedParams[dataClass == "potentialSeismicLines", disturbanceSize]))
+  expect_true(grepl("msm::rtnorm", updatedParams[dataClass == "potentialSeismicLines", disturbanceSize]))
 })
 
 test_that("calculateSize calculates correct values for numeric stability", {
@@ -132,8 +132,8 @@ test_that("calculateSize handles zero-variance inputs with positive sigma", {
   s <- updatedParams[dataClass == "singlePolyDisturbance", disturbanceSize]
   expect_true(!is.na(s))
   
-  # Expect format: rtnorm(1, <mu>, <sigma>, lower = 0) with sigma > 0
-  m <- regexec("^rtnorm\\(1,\\s*([0-9.]+),\\s*([0-9.]+),\\s*lower\\s*=\\s*0\\)$", s)
+  # Expect format: msm::rtnorm(1, <mu>, <sigma>, lower = 0) with sigma > 0
+  m <- regexec("^msm::rtnorm\\(1,\\s*([0-9.]+),\\s*([0-9.]+),\\s*lower\\s*=\\s*0\\)$", s)
   caps <- regmatches(s, m)[[1]]
   expect_gt(length(caps), 2)                               # captured mu and sigma
   mu    <- as.numeric(caps[2])
@@ -151,5 +151,4 @@ test_that("calculateSize is a no-op when whichToUpdate is empty", {
   out <- calculateSize(disturbanceParameters, disturbanceList, whichToUpdate = integer(0))
   expect_identical(out, disturbanceParameters)
 })
-
 

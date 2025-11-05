@@ -61,7 +61,8 @@ calculateSize <- function(disturbanceParameters,
         sdArea <- max(1, round(0.1 * meanArea, 2))
       }
       
-      sub[, disturbanceSize := sprintf("rtnorm(1, %g, %g, lower = 0)", meanArea, sdArea)]
+      # Use fully-qualified msm::rtnorm for truncated normal sampling
+      sub[, disturbanceSize := sprintf("msm::rtnorm(1, %g, %g, lower = 0)", meanArea, sdArea)]
     }
     return(sub)
   }))

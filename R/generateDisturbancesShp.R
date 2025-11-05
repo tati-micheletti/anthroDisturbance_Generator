@@ -26,7 +26,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                     runClusteringInParallel,
                                     useClusterMethod,
                                     refinedStructure){
-  
+
   if (maskWaterAndMountainsFromLines)(Require("spaths"))
   if (useRoadsPackage)(Require("geodata"))
   
@@ -947,8 +947,12 @@ generateDisturbancesShp <- function(disturbanceParameters,
                              round(100*(round(areaChosenTotal, 0)/round(expectedNewDisturbAreaSqM, 0)), 2),"% achieved)"))
             }
             # 1.1. Get each disturbance's size. If the expected disturbance is smaller than the 
-            # normal size, we only disturb what is expected
-            Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
+            # normal size, we only disturb what is expected. Ensure we don't depend on bare rtnorm.
+            expr <- dParOri[["disturbanceSize"]]
+            # Ensure we always call the fully-qualified msm::rtnorm
+            expr <- gsub("(?<!msm::)rtnorm\\(", "msm::rtnorm(", expr, perl = TRUE)
+            expr <- gsub("msm::msm::", "msm::", expr, fixed = TRUE)
+            Size <- round(eval(parse(text = expr)), 0)
             remaining <- max(0, expectedNewDisturbAreaSqM - areaChosenTotal)
             if (remaining <= 0) break
             if (Size > remaining) Size <- remaining
@@ -1143,7 +1147,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 
                 # print("Currently not using, but should test! Something is likely not working")
                 # browser() # HERE is where Mean and SD is used from cropLay
-                lineLength <- rtnorm(
+                lineLength <- msm::rtnorm(
                   length(centerPoint),
                   Mean,
                   Sd,
