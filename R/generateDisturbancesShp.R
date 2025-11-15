@@ -1066,15 +1066,32 @@ generateDisturbancesShp <- function(disturbanceParameters,
                   howManyINeed <- sum(sampledClusters == uniqueSampClus)
                   if (length(toChoseFrom) == 1){
                     sampledOnes <- rep(toChoseFrom, times = howManyINeed)
-                  } else {
+                  } else if (length(toChoseFrom) > 1) {
                     sampledOnes <- sample(toChoseFrom,
                                           replace = TRUE,
                                           size = howManyINeed)
+                  } else {
+                    next
                   }
-                  selectedClusters <- c(selectedClusters,sampledOnes)
-                }              
+                  selectedClusters <- c(selectedClusters, sampledOnes)
+                }
+                # Guard against degenerate selection: no clusters to duplicate
+                candLines <- NULL
+                if (!is.null(selectedClusters) && length(selectedClusters)) {
+                  candLines <- cropLayFinal[cropLayFinal$Pot_Clus %in% selectedClusters, ]
+                }
+                if (is.null(candLines) ||
+                    !inherits(candLines, "SpatVector") ||
+                    nrow(candLines) == 0L) {
+                  warning(paste0(
+                    "Unable to identify candidate seismic line clusters for duplication in Sector '",
+                    Sector, "' (ORIGIN = '", ORIGIN, "', time = ", currentTime,
+                    "). Skipping new seismic line generation for this disturbance."
+                  ), immediate. = TRUE)
+                  break
+                }
                 #TODO Here I can parallelize using future!
-                newLines <- simulateLines(Lines = cropLayFinal[cropLayFinal$Pot_Clus %in% selectedClusters, ],
+                newLines <- simulateLines(Lines = candLines,
                                           distThreshold = clusterDistance,
                                           distNewLinesFact = distanceNewLinesFactor,
                                           refinedStructure = refinedStructure)
