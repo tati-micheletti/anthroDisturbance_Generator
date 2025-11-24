@@ -106,6 +106,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
     if (!length(vals)) return(0)
     sum(vals, na.rm = TRUE)
   }
+  clipToStudyArea <- function(vec, area = studyArea) {
+    if (!inherits(vec, "SpatVector") || tryCatch(nrow(vec) == 0, error = function(...) TRUE)) return(vec)
+    clipped <- tryCatch(terra::intersect(vec, area), error = function(...) NULL)
+    if (inherits(clipped, "SpatVector") && tryCatch(nrow(clipped) > 0, error = function(...) FALSE)) {
+      return(clipped)
+    }
+    # fallback to crop if intersect fails or empties unexpectedly
+    tryCatch(terra::crop(vec, area), error = function(...) vec)
+  }
   bindSpatVectors <- function(lhs, rhs, referenceRaster = rasterToMatchR) {
     lhsValid <- inherits(lhs, "SpatVector") && tryCatch(nrow(lhs) > 0, error = function(...) FALSE)
     rhsValid <- inherits(rhs, "SpatVector") && tryCatch(nrow(rhs) > 0, error = function(...) FALSE)
@@ -135,6 +144,51 @@ generateDisturbancesShp <- function(disturbanceParameters,
       lhs
     })
   }
+  estimateSeismicGridCount <- function(targetAreaM2,
+                                       lengthStats,
+                                       spacingRange = c(50, 100),
+                                       lineWidth = 6,
+                                       maxGrids = 10000L) {
+    if (!is.finite(targetAreaM2) || targetAreaM2 <= 0) return(1L)
+    spacingVals <- spacingRange[is.finite(spacingRange) & spacingRange > 0]
+    meanSpacing <- if (length(spacingVals)) mean(spacingVals) else 75
+    meanLength <- lengthStats$mean
+    if (!is.finite(meanLength) || meanLength <= 0) meanLength <- 1000
+    nCols <- max(1, ceiling(meanLength/meanSpacing))
+    nRows <- max(1, ceiling(meanLength/meanSpacing))
+    meanCross <- 1 # expected value from sample(0:2, 1)
+    estLength <- meanLength * (nCols + nRows + meanCross)
+    estAreaPerGrid <- max(estLength * lineWidth, 1)
+    estGrids <- ceiling(targetAreaM2/estAreaPerGrid)
+    estGrids <- max(1L, as.integer(estGrids))
+    if (estGrids > maxGrids) {
+      warning("Estimated seismicLineGrids (", estGrids, ") exceeds maxGrids (", maxGrids,
+              "); capping to avoid runaway grid generation.", immediate. = TRUE)
+      estGrids <- as.integer(maxGrids)
+    }
+    estGrids
+  }
+  resolveSeismicClusterStep <- function(step, clusterAreas, targetArea,
+                                        totalAreaSqm = NA_real_,
+                                        targetIterations = 25L) {
+    userSupplied <- !is.null(step) && length(step) == 1L && !is.na(step)
+    if (userSupplied) return(max(1L, as.integer(round(step))))
+    meanArea <- if (length(clusterAreas)) mean(clusterAreas, na.rm = TRUE) else NA_real_
+    if (!is.finite(meanArea) || meanArea <= 0) return(1L)
+    estNeeded <- targetArea/meanArea
+    auto <- max(1L, as.integer(round(estNeeded/targetIterations)))
+    if (!is.finite(auto) || auto <= 0) auto <- 1L
+    if (is.finite(totalAreaSqm) && totalAreaSqm > 0) {
+      targetFrac <- targetArea/totalAreaSqm
+      targetFrac <- min(1, targetFrac)
+      scaleFactor <- min(1, max(0.01, 1/(1 + targetFrac * 25)))
+    } else {
+      scaleFactor <- 1/20
+    }
+    scaled <- max(1L, as.integer(round(auto * scaleFactor)))
+    attr(scaled, "scaleFactor") <- scaleFactor
+    scaled
+  }
   
   if (!is(studyArea, "SpatVector"))
     studyArea <- terra::vect(studyArea)
@@ -145,6 +199,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
   totalstudyAreaVAreaSqm <- sumExpanse(uniStudyArea, unit = "m", transform = FALSE)
   totNPix <- sum(rasterToMatch[], na.rm = TRUE)
   calculatedPixelSizem2 <- totalstudyAreaVAreaSqm/totNPix # in m2
+  growthStepEnlargingLinesRaw <- growthStepEnlargingLines
+  growthStepEnlargingLines <- if (is.null(growthStepEnlargingLines) || is.na(growthStepEnlargingLines)) 1 else growthStepEnlargingLines
   
   # FIRST: Enlarging
   #############################################
@@ -211,14 +267,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
             Lay <- terra::buffer(x = Lay, width = RES)
           }
         currArea <- sumExpanse(Lay, unit = "m", transform = FALSE)
-        } else { # If the disturbanceRate Relates To Buffered Area (i.e., caribou-wise)
-          # It doesn't matter if poly or lines or points, if buffered, is buffered to 500m
+      } else { # If the disturbanceRate Relates To Buffered Area (i.e., caribou-wise)
+        # It doesn't matter if poly or lines or points, if buffered, is buffered to 500m
           LayBuff <- terra::buffer(Lay, width = 500) # Need to aggregate to avoid double counting!
+          LayBuff <- clipToStudyArea(LayBuff)
           LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
           currArea <- sumExpanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
-          if (disturbanceRateRelatesToBufferedArea) 
-            message(paste0("Buffered (500m) area for ", Sector, 
-                           " -- ", ORIGIN, ": ", round(currArea/1000000, 2), " Km2"))
+        if (disturbanceRateRelatesToBufferedArea) 
+          message(paste0("Buffered (500m) area for ", Sector, 
+                       " -- ", ORIGIN, ": ", round(currArea/1000000, 2), " Km2"))
           message(paste0("Percentage of current area: ", round(100*((currArea/1000000)/totalstudyAreaVAreaSqKm), 3), "%."))
         }
         # The dParOri[["disturbanceRate"]] (or disturbRate) is (by default) the calculated difference between
@@ -373,21 +430,23 @@ generateDisturbancesShp <- function(disturbanceParameters,
       }, polyLays)
     }
     if (length(linesLays)) {
-      linesLays <- lapply(linesLays, function(X) {
-        X <- toSpat(X)
-        if (inherits(X, "SpatVector")) terra::buffer(x = X, width = RES) else X
-      })
+      linesLays <- lapply(linesLays, toSpat)            # keep raw line geometry
     }
     polyLays  <- lapply(polyLays, toSpat)
     hasFeatures <- function(x) inherits(x, "SpatVector") &&
       tryCatch(terra::nrow(x) > 0L, error = function(...) FALSE)
     linesLays <- Filter(hasFeatures, linesLays)
     polyLays  <- Filter(hasFeatures, polyLays)
+    # buffered copies of lines for masking only
+    maskLinesLays <- lapply(linesLays, function(x) {
+      if (inherits(x, "SpatVector")) terra::buffer(x, width = RES) else x
+    })
+    maskLinesLays <- Filter(hasFeatures, maskLinesLays)
     if (!length(polyLays) && !length(linesLays)) {
       # No current disturbances — proceed with generation using full potential
       allLays <- NULL
     } else {
-      linesAndPolys <- Filter(Negate(is.null), c(polyLays, linesLays))
+      linesAndPolys <- Filter(Negate(is.null), c(polyLays, maskLinesLays))
       if (length(linesAndPolys)) {
         msgClasses <- paste(vapply(linesAndPolys, function(x) paste(class(x), collapse = "/"), character(1)), collapse = ", ")
         message("Combining current disturbance layers (", length(linesAndPolys), ") classes: ", msgClasses)
@@ -642,9 +701,10 @@ generateDisturbancesShp <- function(disturbanceParameters,
           expectedNewDisturbAreaSqM <- expectedNewDisturbAreaSqKm * 1000000 # expected EXTRA disturbed area in sqm 
           # (i.e., how much 0.2% of disturbance over the entire area actually represents)
           
+          useBufferedArea <- isTRUE(disturbanceRateRelatesToBufferedArea) || identical(ORIGIN, "seismicLines")
           # Before I do the iterations I wanna know what is the currently disturbed area for this specific disturbance type
           if (all(!is.null(Lay),
-                  disturbanceRateRelatesToBufferedArea)){
+                  useBufferedArea)){
             if (is(Lay, "RasterLayer"))
               Lay <- rast(Lay)
             if (is(Lay, "SpatRaster")){ # Need to convert to polygon for area
@@ -652,6 +712,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
               Lay <- terra::as.polygons(Lay)
             }
             LayBuff <- terra::buffer(Lay, width = 500) # Need to aggregate to avoid double counting!
+            LayBuff <- clipToStudyArea(LayBuff)
             LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
             currArea <- sumExpanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
             if (length(currArea) == 0){
@@ -753,10 +814,19 @@ generateDisturbancesShp <- function(disturbanceParameters,
             } else {
               potLayTopValid <- potLayTop
             }
-            # If everything got erased, there's nothing more to add — stop
+            # If everything got erased, fall back to the un-erased potential; if that
+            # is also empty, stop.
             if (!inherits(potLayTopValid, "SpatVector") || nrow(potLayTopValid) == 0) {
-              warning("No valid potential features remain after erasing/intersection. Stopping.")
-              return(NULL)
+              warning(paste0(
+                "No valid potential features remain after erasing/intersection for ",
+                Sector, " -- ", ORIGIN,
+                ". Falling back to full potential for this iteration."
+              ), immediate. = TRUE)
+              potLayTopValid <- potLayTop
+              if (!inherits(potLayTopValid, "SpatVector") || nrow(potLayTopValid) == 0) {
+                warning("Fallback potential is also empty. Stopping.")
+                return(NULL)
+              }
             }
 
             # Now check if there is enough space for the expected disturbance!
@@ -927,6 +997,36 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 ", upper=", if (is.finite(lengthUpper)) signif(lengthUpper, 3) else "Inf"
               )
             }
+            if (!useClusterMethod) {
+              if (is.null(seismicLineGrids) ||
+                  !is.finite(seismicLineGrids) ||
+                  is.na(seismicLineGrids) ||
+                  seismicLineGrids <= 0) {
+                seismicLineGrids <- estimateSeismicGridCount(
+                  targetAreaM2 = expectedNewDisturbAreaSqM,
+                  lengthStats  = lengthStats
+                )
+                rateMsg <- if (is.finite(disturbRate)) paste0(signif(disturbRate, 3), "%") else "unknown"
+                message(crayon::green(paste0(
+                  "Auto-derived seismicLineGrids = ", seismicLineGrids,
+                  " using study-area seismic lines (mean length ~", round(Mean, 1),
+                  " m), rate ", rateMsg,
+                  " over ", dParOri[["disturbanceInterval"]], " year interval."
+                )))
+              } else {
+                seismicLineGrids <- max(1L, as.integer(round(seismicLineGrids)))
+                message(crayon::blue(paste0(
+                  "Using provided seismicLineGrids = ", seismicLineGrids,
+                  " (no auto-estimation applied)."
+                )))
+              }
+            } else {
+              message(crayon::blue(paste0(
+                "useClusterMethod is TRUE; seismicLineGrids = ",
+                ifelse(is.null(seismicLineGrids), "NULL", seismicLineGrids),
+                " (grid count not used in clustering workflow)."
+              )))
+            }
           }
           
           # 1. Make the iteration, and while the area is not achieved, continue 
@@ -934,6 +1034,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
           IT <- 1
           newDisturbs <- NULL
           alreadyReduced <- FALSE
+          lineClusterStepAutoMsg <- TRUE
           
           while (areaChosenTotal < expectedNewDisturbAreaSqM){
             if (IT %in% 1:10){
@@ -994,12 +1095,33 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 }
                 
                 if (geomtype(cropLayFinal) != "lines"){
-                  print("cropLayFinal needs to be lines and needs to have all previous lines")
-                  browser()
+                  debug_dir <- file.path(getwd(), "scratch", "debug")
+                  dir.create(debug_dir, recursive = TRUE, showWarnings = FALSE)
+                  base_name <- paste0("cropLayFinal_not_lines_", currentTime, "_", Sector, "_", ORIGIN)
+                  rds_path  <- file.path(debug_dir, paste0(base_name, ".rds"))
+                  gpkg_path <- file.path(debug_dir, paste0(base_name, ".gpkg"))
+                  summary_obj <- list(
+                    sector = Sector,
+                    origin = ORIGIN,
+                    currentTime = currentTime,
+                    firstTime = firstTime,
+                    class = class(cropLayFinal),
+                    geomtype = tryCatch(unique(terra::geomtype(cropLayFinal)), error = function(...) NA_character_),
+                    nrow = tryCatch(nrow(cropLayFinal), error = function(...) NA_integer_),
+                    names = tryCatch(names(cropLayFinal), error = function(...) NULL)
+                  )
+                  try(saveRDS(list(meta = summary_obj, object = cropLayFinal), rds_path), silent = TRUE)
+                  try(terra::writeVector(cropLayFinal, gpkg_path, filetype = "GPKG", overwrite = TRUE), silent = TRUE)
+                  stop(paste0("Seismic duplication expected lines but got geomtype ",
+                              paste(summary_obj$geomtype, collapse = "/"),
+                              ". Dumped to ", rds_path, " and ", gpkg_path, " for inspection."))
                 }
                 
-                # 0. Calculate the area of each line buffered by 3m (min width in the field)
-                cropLayFinal$buff3mAreaM2 <- expanse_vec(buffer(x = cropLayFinal, width = 3))
+                # 0. Calculate the area of each line buffered at the scale used for targets
+                # Use 500 m when rates relate to buffered area; otherwise keep the 3 m footprint.
+                buffWidth <- if (isTRUE(disturbanceRateRelatesToBufferedArea)) 500 else 3
+                areaCol <- "buffAreaM2"
+                cropLayFinal[[areaCol]] <- expanse_vec(buffer(x = cropLayFinal, width = buffWidth))
                 
                 # 1. Add a column in how much each cluster represents in the total in m2 -- not by individual line!
                 cropLayFinalDT <- as.data.table(as.data.frame(cropLayFinal))
@@ -1025,38 +1147,68 @@ generateDisturbancesShp <- function(disturbanceParameters,
                   message("Pot_Clus not found in cropLayFinalDT. Debug")
                   browser()
                 }
-                cropLayFinalDT[, sumBuff3mAreaM2 := sum(buff3mAreaM2), by = "Pot_Clus"] 
+                cropLayFinalDT[, sumBuffAreaM2 := sum(get(areaCol)), by = "Pot_Clus"] 
                 # Need to do by potential as for each potential, cluster numbers are repeated
-                totalBuff3mArea <- sum(cropLayFinalDT$buff3mAreaM2, na.rm = TRUE)
+                totalBuffArea <- sum(cropLayFinalDT[[areaCol]], na.rm = TRUE)
+                clusterAreas <- unique(cropLayFinalDT[, .(Pot_Clus, sumBuffAreaM2)])$sumBuffAreaM2
                 
                 # Guard against division by zero and compute a single % per cluster
-                if (totalBuff3mArea <= 0) {
-                  cropLayFinalDT[, PercBuff3mAreaOfTotalM2 := 0]
+                if (totalBuffArea <= 0) {
+                  cropLayFinalDT[, PercBuffAreaOfTotalM2 := 0]
                 } else {
                   # Compute % once per cluster, then propagate
-                  clusPct <- cropLayFinalDT[, .(PercBuff3mAreaOfTotalM2 = 100 * sumBuff3mAreaM2[1] / totalBuff3mArea),
+                  clusPct <- cropLayFinalDT[, .(PercBuffAreaOfTotalM2 = 100 * sumBuffAreaM2[1] / totalBuffArea),
                                             by = "Pot_Clus"]
                   cropLayFinalDT <- clusPct[cropLayFinalDT, on = "Pot_Clus"]
                 }
                 
-                if (sum(unique(cropLayFinalDT[, c("Pot_Clus","PercBuff3mAreaOfTotalM2")]$PercBuff3mAreaOfTotalM2)) > 100.001){ 
-                  message(paste0("Total contribution of clusters in total area is higher than 100%.",
-                                 "Something may be wrong. Entering debug mode."))
-                  browser()
+                # Robust guard: NA-safe and tolerant of minor floating-point drift
+                pct_sum <- sum(
+                  unique(cropLayFinalDT[, c("Pot_Clus", "PercBuffAreaOfTotalM2")]$PercBuffAreaOfTotalM2),
+                  na.rm = TRUE
+                )
+                if (!is.na(pct_sum) && pct_sum > 100.001) {
+                  message(paste0(
+                    "Total contribution of clusters in total area is higher than 100% (",
+                    round(pct_sum, 3),
+                    "%). Something may be wrong."
+                  ))
+                  if (isTRUE(getOption("anthroDisturbance.debugClusters", FALSE))) {
+                    message("Entering debug mode because anthroDisturbance.debugClusters = TRUE")
+                    browser()
+                  }
                 } # TODO test
                 # 2. Choose randomly clusters (with different probabilities) that sum to the total expected new. 
-                # sumBuff3mAreaM2 --> by cluster
-                # PercBuff3mAreaOfTotalM2 --> representation if each cluster over the total
+                # sumBuffAreaM2 --> by cluster
+                # PercBuffAreaOfTotalM2 --> representation if each cluster over the total
                 # Potential --> Represents the highest potential for being chosen.
                 # --> Draw for all potentials, the probability a cluster within these will be chosen (higher potential, higher chances)
                 # Normalize probabilities to sum to 1
+                lineClusterStep <- resolveSeismicClusterStep(
+                  step = growthStepEnlargingLinesRaw,
+                  clusterAreas = clusterAreas,
+                  targetArea = expectedNewDisturbAreaSqM,
+                  totalAreaSqm = totalstudyAreaVAreaSqm
+                )
+                if (is.null(growthStepEnlargingLinesRaw) || is.na(growthStepEnlargingLinesRaw)) {
+                  if (isTRUE(lineClusterStepAutoMsg)) {
+                    scaleFactor <- attr(lineClusterStep, "scaleFactor")
+                    if (is.null(scaleFactor)) scaleFactor <- NA_real_
+                    message(crayon::blue(paste0(
+                      "Auto-derived growthStepEnlargingLines for seismic clustering = ",
+                      lineClusterStep, " (scaleFactor=", signif(scaleFactor, 3),
+                      ", aiming to reduce iterations)."
+                    )))
+                    lineClusterStepAutoMsg <- FALSE
+                  }
+                }
 
                 probabilities <- unique(cropLayFinalDT$Potential) / sum(unique(cropLayFinalDT$Potential))
                 if (length(unique(cropLayFinalDT$Potential)) == 1){
-                  sampledClusters <- rep(unique(cropLayFinalDT$Potential), times = growthStepEnlargingLines)### <~~~~~~~~~~~~ Changed here from 1000 to 1 to try increasing iterations number in Seismic lines, currently overdoing it.
+                  sampledClusters <- rep(unique(cropLayFinalDT$Potential), times = lineClusterStep)
                 } else {
                   sampledClusters <- sample(unique(cropLayFinalDT$Potential), 
-                                            size = growthStepEnlargingLines, ### <~~~~~~~~~~~~ Changed here from 1000 to 1 to try increasing iterations number in Seismic lines, currently overdoing it. 
+                                            size = lineClusterStep, 
                                             replace = TRUE, 
                                             prob = probabilities)
                 }
@@ -1091,10 +1243,39 @@ generateDisturbancesShp <- function(disturbanceParameters,
                   break
                 }
                 #TODO Here I can parallelize using future!
-                newLines <- simulateLines(Lines = candLines,
-                                          distThreshold = clusterDistance,
-                                          distNewLinesFact = distanceNewLinesFactor,
-                                          refinedStructure = refinedStructure)
+                # Clean potentially invalid geometries to avoid low-level C++ aborts in terra
+                candLines <- tryCatch({
+                  bad <- tryCatch(!terra::is.valid(candLines), error = function(...) rep(FALSE, nrow(candLines)))
+                  if (any(bad, na.rm = TRUE)) candLines <- candLines[!bad, ]
+                  sf_obj <- tryCatch(sf::st_as_sf(candLines), error = function(e) NULL)
+                  if (!is.null(sf_obj)) {
+                    sf_obj <- tryCatch(sf::st_make_valid(sf_obj), error = function(...) sf_obj)
+                    candLines <- tryCatch(terra::vect(sf_obj), error = function(e) candLines)
+                  }
+                  candLines
+                }, error = function(e) candLines)
+
+                # Wrap simulateLines so refinedStructure can be requested safely; on failure, fall back.
+                newLines <- tryCatch(
+                  simulateLines(Lines = candLines,
+                                distThreshold = clusterDistance,
+                                distNewLinesFact = distanceNewLinesFactor,
+                                refinedStructure = refinedStructure),
+                  error = function(e) {
+                    warning(
+                      paste0(
+                        "simulateLines failed (refinedStructure=", refinedStructure,
+                        "); falling back to refinedStructure=FALSE. Error: ",
+                        conditionMessage(e)
+                      ),
+                      immediate. = TRUE
+                    )
+                    simulateLines(Lines = candLines,
+                                  distThreshold = clusterDistance,
+                                  distNewLinesFact = distanceNewLinesFactor,
+                                  refinedStructure = FALSE)
+                  }
+                )
                 # newDist NEEDS to be buffered, first by 3m and then (happening below in the code) by 
                 # 500m, if 
                 # disturbanceRateRelatesToBufferedArea 
@@ -1267,7 +1448,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
               if (length(cn) == ncol(newDist)) names(newDist) <- cn
               # 1.4. If we relate to buffered area, we need to make an inner buffer, as it is included in 
               # areaChosenTotal.
-              if (disturbanceRateRelatesToBufferedArea){
+              if (useBufferedArea){
                 # Then, if disturbanceRateRelatesToBufferedArea, we buffer this point to identify what 
                 # if the minimum area we can have. Then, we also calculate the area of the new disturbance 
                 # and we check if the area of the new disturbance is smaller than the minimum area of the 
@@ -1292,8 +1473,18 @@ generateDisturbancesShp <- function(disturbanceParameters,
               }
             }
             
-            if (disturbanceRateRelatesToBufferedArea){
+            # Keep new disturbance inside the study area/potential footprint to avoid oversized polygons
+            #newDist <- reproducible::postProcess(newDist, studyArea)
+            #if (inherits(potLayTopValid, "SpatVector") && tryCatch(nrow(potLayTopValid) > 0, error = function(...) FALSE)) {
+            #  clipped <- tryCatch(terra::intersect(newDist, potLayTopValid), error = function(...) NULL)
+            #  if (inherits(clipped, "SpatVector") && tryCatch(nrow(clipped) > 0, error = function(...) FALSE)) {
+            #    newDist <- clipped
+            #  }
+            #}
+            
+            if (useBufferedArea){
               newDistBuff <- terra::buffer(newDist, width = 500) 
+              newDistBuff <- clipToStudyArea(newDistBuff)
               if (nrow(newDistBuff) > 1){
                 newDistBuff <- terra::aggregate(newDistBuff)
               }
@@ -1328,6 +1519,106 @@ generateDisturbancesShp <- function(disturbanceParameters,
             IT <- IT + 1
           }
           
+          # If we overshot the buffered-area target for polygonal Generating classes,
+          # shrink the last generated polygon so that the final 500 m–buffered area
+          # matches the expected target more closely. This is applied only for
+          # forestry/mining/oilGas polygon disturbances (not seismic lines).
+          if (isTRUE(disturbanceRateRelatesToBufferedArea) &&
+              !identical(ORIGIN, "seismicLines") &&
+              inherits(newDisturbs, "SpatVector")) {
+            gt_all <- tryCatch(unique(terra::geomtype(newDisturbs)), error = function(...) character(0))
+            if (length(gt_all) && "polygons" %in% gt_all) {
+              buff_all <- tryCatch(terra::buffer(newDisturbs, width = 500), error = function(...) NULL)
+              buff_all <- clipToStudyArea(buff_all)
+              if (inherits(buff_all, "SpatVector") && nrow(buff_all) > 0) {
+                featAreas <- sumExpanse(buff_all, unit = "m", transform = FALSE)
+                totArea <- suppressWarnings(as.numeric(sum(featAreas, na.rm = TRUE)))
+                overshoot <- suppressWarnings(as.numeric(totArea - expectedNewDisturbAreaSqM))
+                if (is.finite(overshoot) && overshoot > 0) {
+                  lastIdx <- length(featAreas)
+                  lastArea <- featAreas[lastIdx]
+                  prevArea <- totArea - lastArea
+                  targetLast <- max(0, expectedNewDisturbAreaSqM - prevArea)
+                  
+                  if (targetLast <= 0) {
+                    message(paste0("Overshoot for ", Sector, " -- ", ORIGIN,
+                                   " is fully attributable to last polygon; dropping it to meet target."))
+                    if (nrow(newDisturbs) > 1L) {
+                      newDisturbs <- newDisturbs[seq_len(nrow(newDisturbs) - 1L), ]
+                      buff_all <- tryCatch(terra::buffer(newDisturbs, width = 500), error = function(...) NULL)
+                      areaChosenTotal <- if (inherits(buff_all, "SpatVector") && nrow(buff_all) > 0) {
+                        sumExpanse(buff_all, unit = "m", transform = FALSE)
+                      } else {
+                        0
+                      }
+                    } else {
+                      newDisturbs <- NULL
+                      areaChosenTotal <- 0
+                    }
+                  } else {
+                    geomLast <- newDisturbs[nrow(newDisturbs), ]
+                    gt_last <- tryCatch(terra::geomtype(geomLast)[1], error = function(...) NA_character_)
+                    if (isTRUE(gt_last == "polygons")) {
+                      bestGeom <- geomLast
+                      bestArea <- lastArea
+                      # Rough upper bound for shrink distance based on equivalent-circle radius
+                      upper <- suppressWarnings(sqrt(lastArea / pi))
+                      if (!is.finite(upper) || upper <= 0) upper <- 1000
+                      lower <- 0
+                      for (it_shrink in seq_len(12L)) {
+                        mid <- (lower + upper) / 2
+                        if (!is.finite(mid) || mid <= 0) break
+                        shrunk <- tryCatch(terra::buffer(geomLast, width = -mid), error = function(...) NULL)
+                        if (is.null(shrunk) || nrow(shrunk) == 0L ||
+                            any(is.na(as.vector(terra::ext(shrunk))))) {
+                          upper <- mid
+                          next
+                        }
+                        buff_mid <- tryCatch(terra::buffer(shrunk, width = 500), error = function(...) NULL)
+                        if (is.null(buff_mid) || nrow(buff_mid) == 0L) {
+                          upper <- mid
+                          next
+                        }
+                        areaMid <- suppressWarnings(as.numeric(sumExpanse(buff_mid, unit = "m", transform = FALSE)))
+                        if (!is.finite(areaMid) || areaMid <= 0) {
+                          upper <- mid
+                          next
+                        }
+                        if (abs(areaMid - targetLast) < abs(bestArea - targetLast)) {
+                          bestGeom <- shrunk
+                          bestArea <- areaMid
+                        }
+                        if (areaMid > targetLast) {
+                          # still too big → shrink more
+                          lower <- mid
+                        } else {
+                          # too small → shrink less
+                          upper <- mid
+                        }
+                      }
+                      # Replace the last feature with the shrunken geometry
+                      if (!is.null(bestGeom) && nrow(bestGeom) > 0L) {
+                        if (nrow(newDisturbs) > 1L) {
+                          keep <- newDisturbs[seq_len(nrow(newDisturbs) - 1L), ]
+                          newDisturbs <- rbind(keep, bestGeom)
+                        } else {
+                          newDisturbs <- bestGeom
+                        }
+                        buff_all <- tryCatch(terra::buffer(newDisturbs, width = 500), error = function(...) NULL)
+                        buff_all <- clipToStudyArea(buff_all)
+                        areaChosenTotal <- if (inherits(buff_all, "SpatVector") && nrow(buff_all) > 0) {
+                          sumExpanse(buff_all, unit = "m", transform = FALSE)
+                        } else {
+                          0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          
           
           message(paste0("Percentage of disturbed future area after buffer: ", 
                          round(100*(areaChosenTotal/totalstudyAreaVAreaSqm), 4), "%."))
@@ -1351,6 +1642,17 @@ generateDisturbancesShp <- function(disturbanceParameters,
               file = file.path(Paths[["outputPath"]], paste0("PercentageDisturbances_", currentTime, 
                                                              "_", runName, ".txt")),
               append = TRUE, sep = "\n")
+        }
+        # If nothing was generated (NULL/empty) but an input layer exists, keep it
+        # to avoid wiping layers when buffered masking eliminates all potential.
+        if ((is.null(newDisturbs) ||
+             (inherits(newDisturbs, "SpatVector") && tryCatch(nrow(newDisturbs) == 0, error = function(...) FALSE))) &&
+            !is.null(Lay) &&
+            inherits(Lay, "SpatVector") &&
+            tryCatch(nrow(Lay) > 0, error = function(...) FALSE)) {
+          message(paste0("Generated disturbances for ", Sector, " -- ", ORIGIN,
+                         " are empty; retaining existing layer."))
+          newDisturbs <- Lay
         }
         return(newDisturbs)
       })
@@ -1502,12 +1804,15 @@ generateDisturbancesShp <- function(disturbanceParameters,
           endLay <- bindSpatVectors(endLay, connectedOne)
         }          
       } else {
+        # Hash target to avoid reusing mismatched cached rasters across different rasterToMatch/studyArea pairs
+        targetHash <- reproducible::.robustDigest(list(studyArea = studyArea, rasterToMatch = rasterToMatch))
+        targetHash <- paste0(unlist(targetHash), collapse = "_")
         if (isTRUE(useRoadsPackage) || (isTRUE(maskWaterAndMountainsFromLines) && is.null(featuresToAvoid))) {
-          DEMraw <- elevation_30s(country = "CAN", path = Paths[["inputPath"]])
+          DEMraw <- geodata::elevation_30s(country = "CAN", path = Paths[["inputPath"]])
           DEM <- postProcessTo(from = DEMraw, to = rasterToMatch, cropTo = studyArea, 
                                projectTo = rasterToMatch, maskTo = studyArea, 
                                writeTo = file.path(Paths[["inputPath"]], 
-                                                   paste0("DEM_", reproducible::.robustDigest(studyArea))))
+                                                   paste0("DEM_", targetHash, ".tif")))
         }
         if (useRoadsPackage){
           # Need to create `connected`
@@ -1529,24 +1834,34 @@ generateDisturbancesShp <- function(disturbanceParameters,
               # # TRY IMPLEMENTING A VERSION OF THE LINES WHICH AVOID CERTAIN POLYGONS?
               # # THEN I CAN MAKE RIVERS, LAKES, WETLAND AND HIGH MOUNTAIN DISAPPEAR FROM THE MAP, 
               # AND THUS BE AVOIDED BY LINES BUILDING
-              waterraw <- landcover("water", path = Paths[["inputPath"]])
+              waterraw <- geodata::landcover("water", path = Paths[["inputPath"]])
               water <- postProcessTo(from = waterraw, to = rasterToMatch, cropTo = studyArea, 
                                      projectTo = rasterToMatch, maskTo = studyArea, 
                                      writeTo = file.path(Paths[["inputPath"]], 
                                                          paste0("water_", 
-                                                                reproducible::.robustDigest(studyArea))))
-              wetlandsraw <- landcover("wetland", path = Paths[["inputPath"]])
+                                                                targetHash, ".tif")))
+              wetlandsraw <- geodata::landcover("wetland", path = Paths[["inputPath"]])
               wet <- postProcessTo(from = wetlandsraw, to = rasterToMatch, cropTo = studyArea, 
                                    projectTo = rasterToMatch, maskTo = studyArea, 
                                    writeTo = file.path(Paths[["inputPath"]], 
                                                        paste0("wet_", 
-                                                              reproducible::.robustDigest(studyArea))))
+                                                               targetHash, ".tif")))
               # Now we put all layers together and exclude the pixels for building the roads (but without modifying the final maps!)
               DEM[DEM[] < altitudeCut] <- 0
               DEM[DEM[] >= altitudeCut] <- 1
               DEM[wet[] > 0.8] <- 1
               DEM[water[] > 0.8] <- 1
               featuresToAvoid <- copy(DEM)
+              if (inherits(featuresToAvoid, "SpatRaster")) {
+                featuresToAvoid <- tryCatch(
+                  terra::extend(featuresToAvoid, rasterToMatch),
+                  error = function(e) {
+                    warning("Failed to align featuresToAvoid to rasterToMatch extent: ", conditionMessage(e),
+                            immediate. = TRUE, call. = FALSE)
+                    featuresToAvoid
+                  }
+                )
+              }
               featuresToAvoid[featuresToAvoid == 0] <- NA
               featuresToAvoid[is.na(rasterToMatch)] <- 1
             }
@@ -1659,6 +1974,7 @@ generateDisturbancesShp <- function(disturbanceParameters,
           browser()
         } 
         LayBuff <- terra::buffer(Lay[[disturbanceEnd]], width = 500) # Need to aggregate to avoid double counting!
+        LayBuff <- clipToStudyArea(LayBuff)
         LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
         currArea <- sumExpanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
         message(paste0("Buffered (500m) area for ", Sector, 

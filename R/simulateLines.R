@@ -23,6 +23,17 @@ simulateLines <- function(Lines, distThreshold = 5000,
     clCentr <- centroids(exSet)
     # Need to make a buffer around the centroid to get a random point for the center of the lines
     centBuff <- terra::buffer(x = clCentr, width = buffDist)
+    # Ensure we have a valid CRS for downstream line creation
+    crs_parent <- tryCatch(terra::crs(Lines, proj = TRUE), error = function(e) "")
+    crs_ex <- tryCatch(terra::crs(exSet, proj = TRUE), error = function(e) "")
+    if (!nzchar(crs_ex) && nzchar(crs_parent)) {
+      exSet <- tryCatch(terra::project(exSet, crs_parent), error = function(e) exSet)
+      crs_ex <- tryCatch(terra::crs(exSet, proj = TRUE), error = function(e) "")
+    }
+    if (!nzchar(crs_ex)) {
+      warning("simulateLines: skipping cluster ", potclus, " due to missing CRS on Lines/exSet.", immediate. = TRUE)
+      next
+    }
     centB <- terra::spatSample(centBuff, size = NROW(clCentr),
                                method = "random") # Here we need to get a random point within this buffered area!
     cent <- crds(centB)
@@ -37,6 +48,12 @@ simulateLines <- function(Lines, distThreshold = 5000,
     
     for (ii in 1:NROW(exSet)) {
       angles[ii] <- calculateLineAngle(exSet[ii, ])
+    }
+    angles <- suppressWarnings(as.numeric(angles))
+    if (any(!is.finite(angles))) {
+      # Replace non-finite angles with random orientations to keep downstream logic boolean
+      bad <- which(!is.finite(angles))
+      angles[bad] <- runif(length(bad), 0, 180)
     }
     
     if (nLines > 1) {
@@ -81,6 +98,21 @@ simulateLines <- function(Lines, distThreshold = 5000,
     } else {
       lineLengths <- terra::perim(exSet)[1]
       if (length(lineLengths) > 1) stop("Something went wrong. Please debug.")
+    }
+    # Coerce and validate lengths; drop cluster if invalid
+    lineLengths <- suppressWarnings(as.numeric(lineLengths))
+    if (!length(lineLengths) ||
+        any(is.na(lineLengths)) ||
+        any(!is.finite(lineLengths)) ||
+        any(lineLengths <= 0, na.rm = TRUE)) {
+      warning(paste0("simulateLines: skipping cluster ", potclus,
+                     " due to invalid line lengths (NA/Inf/non-positive)."),
+              immediate. = TRUE)
+      next
+    }
+    # If refinedStructure is requested but the cluster is degenerate, turn it off early
+    if (refinedStructure && (nLines < 2 || any(!is.finite(angles)) || any(!is.finite(lineLengths)))) {
+      refinedStructure <- FALSE
     }
     # Initialize with random lines for all
     simulatedLines <- lapply(1:nLines, function(i) {

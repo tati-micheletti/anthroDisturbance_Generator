@@ -17,6 +17,7 @@ generateDisturbances <- function(disturbanceParameters,
   # Extracting layers from previous ones
   # Total study area
   rasterToMatchR <- raster::raster(rasterToMatch)
+  growthStepEnlargingLines <- if (is.null(growthStepEnlargingLines) || is.na(growthStepEnlargingLines)) 1 else growthStepEnlargingLines
 
   safeMergeSpatVectors <- function(items,
                                    context = "spatial vectors",
@@ -267,11 +268,19 @@ generateDisturbances <- function(disturbanceParameters,
   dPar <- disturbanceParameters[disturbanceType  %in% "Enlarging", ]
   whichSector <- dPar[["dataName"]]
   Enlarged <- lapply(whichSector, function(Sector) {
-    whichOrigin <- dPar[dataName == Sector, disturbanceOrigin]
-    if (length(whichOrigin) != 1) {
-      print("Repeated origins and sector. Debug")
-      browser()
-    } # Bug Catch
+    whichOriginRaw <- dPar[dataName == Sector, disturbanceOrigin]
+    whichOrigin <- unique(whichOriginRaw)
+    if (!length(whichOrigin)) {
+      warning("[generateDisturbances] No disturbanceOrigin rows found for ", Sector,
+              " in Enlarging; skipping.", call. = FALSE)
+      return(NULL)
+    }
+    if (length(whichOriginRaw) != length(whichOrigin)) {
+      message(crayon::yellow(paste0(
+        "[generateDisturbances] Duplicate origins for ", Sector, "; using unique values: ",
+        paste(whichOrigin, collapse = ",")
+      )))
+    }
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
       Lay <- disturbanceList[[Sector]][[ORIGIN]]
       if (is.null(Lay)) {
@@ -429,11 +438,19 @@ generateDisturbances <- function(disturbanceParameters,
   dPar <- disturbanceParameters[disturbanceType  %in% "Generating", ]
   whichSector <- dPar[["dataName"]]
   Generated <- lapply(whichSector, function(Sector) {
-    whichOrigin <- dPar[dataName == Sector, disturbanceOrigin]
-    if (length(whichOrigin) != 1) {
-      print("Repeated origins and sector. Debug")
-      browser()
-    } # Bug Catch
+    whichOriginRaw <- dPar[dataName == Sector, disturbanceOrigin]
+    whichOrigin <- unique(whichOriginRaw)
+    if (!length(whichOrigin)) {
+      warning("[generateDisturbances] No disturbanceOrigin rows found for ", Sector,
+              " in Generating; skipping.", call. = FALSE)
+      return(NULL)
+    }
+    if (length(whichOriginRaw) != length(whichOrigin)) {
+      message(crayon::yellow(paste0(
+        "[generateDisturbances] Duplicate origins for ", Sector, "; using unique values: ",
+        paste(whichOrigin, collapse = ",")
+      )))
+    }
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
 
       dParOri <- dPar[dataName == Sector & disturbanceOrigin == ORIGIN,]
@@ -717,6 +734,12 @@ generateDisturbances <- function(disturbanceParameters,
         # get zero pixels if the size of each disturbance is not too big 
         # [UPDATE: This shouldn't happen anymore with the changes in the code]
       }
+      # Upper-bound requested pixels by available potential
+      availablePix <- sum(!is.na(terra::values(potLayF)))
+      if (is.finite(availablePix)) {
+        expectedDistPixels <- min(expectedDistPixels, availablePix)
+        totPixToChoose <- pmin(totPixToChoose, availablePix)
+      }
       # 4. Select which pixels are the most suitable and then get the number of neighbors based on 
       # the needed sizes
       # Can't forget to take pixels that already have disturbance out of the potential availability!
@@ -730,12 +753,16 @@ generateDisturbances <- function(disturbanceParameters,
       potentialDT <- na.omit(data.table(pixelID = 1:ncell(potLayF),
                                 vals = terra::values(potLayF)))
       # Third, subset the best pixels
-      if (max(unique(potentialDT[["vals"]])) %in% c(-Inf, Inf)){
-        message(paste0("max(unique(potentialDT[['vals']])) is ", max(unique(potentialDT[["vals"]])), 
-                       ". Please debug."))
-        browser()
+      potentialDT <- potentialDT[is.finite(vals)]
+      if (!nrow(potentialDT)) {
+        message(crayon::red(paste0(
+          "[generateDisturbances] No finite potential values for ", ORIGIN, " (", Sector,
+          "); skipping disturbance generation."
+        )))
+        return(NULL)
       }
-      bestPotential <- potentialDT[vals == max(unique(potentialDT[["vals"]])), pixelID]
+      potentialVals <- sort(unique(potentialDT[["vals"]]), decreasing = TRUE)
+      bestPotential <- potentialDT[vals == potentialVals[1], pixelID]
       # Then, randomly, choose the pixels. Here need to pay attention to choose one per "development"
       # and only then use the adjacent to get to the correct sizes.
       # length(totPixToChoose) --> is the number of pixels minus the ones that don't need adjacent. 
@@ -744,29 +771,46 @@ generateDisturbances <- function(disturbanceParameters,
       # should match very closely to expectedDistPixels
       allSelected <- FALSE
       if (sum(totPixToChoose) > length(bestPotential)){
-        # This means that the best potential is not enough. So we need to increase to the 2 best 
-        # potentials.
+        # This means that the best potential is not enough. So we need to increase to the 2 best
+        # potentials (and keep expanding until either we have enough or exhaust all potential).
         counter <- 1
-        while (sum(totPixToChoose) > length(bestPotential)){
-          classesToInclude <- 1:(counter+1)
+        while (sum(totPixToChoose) > length(bestPotential) &&
+               counter < length(potentialVals)) {
+          classesToInclude <- 1:min(counter + 1, length(potentialVals))
           # subset the best pixels
-          bestPotential <- potentialDT[vals %in% sort(decreasing = TRUE, 
-                                                    unique(potentialDT[["vals"]]))[classesToInclude], 
+          bestPotential <- potentialDT[vals %in% potentialVals[classesToInclude],
                                        pixelID]
-          counter <- counter+1
-          if (all(classesToInclude %in% unique(potentialDT[["vals"]]))){
-            message(crayon::red(paste0("All pixels available for ", ORIGIN, " have been selected. ",
-                                       "This distubance will remain static until the end of the ",
-                                       "simulation.")))
-            pixNewDist <- bestPotential
-            allSelected <- TRUE
-            break
-          }
+          counter <- counter + 1
+        }
+        if (sum(totPixToChoose) > length(bestPotential)) {
+          message(crayon::red(paste0("All pixels available for ", ORIGIN, " have been selected. ",
+                                     "This distubance will remain static until the end of the ",
+                                     "simulation.")))
+          pixNewDist <- bestPotential
+          allSelected <- TRUE
+        } else if (length(totPixToChoose) > length(bestPotential)) {
+          message(crayon::red(paste0("Number of requested disturbances for ", ORIGIN,
+                                     " exceeds available potential locations (", length(totPixToChoose),
+                                     " > ", length(bestPotential), "). Selecting all available cells.")))
+          pixNewDist <- bestPotential
+          allSelected <- TRUE
+        } else {
+          pixNewDist <- sample(x = bestPotential,
+                               size = length(totPixToChoose),
+                               replace = FALSE)
         }
       } else {
-        pixNewDist <- sample(x = bestPotential, 
-                             size = length(totPixToChoose), 
-                             replace = FALSE)
+        if (length(totPixToChoose) > length(bestPotential)) {
+          message(crayon::red(paste0("Number of requested disturbances for ", ORIGIN,
+                                     " exceeds available potential locations (", length(totPixToChoose),
+                                     " > ", length(bestPotential), "). Selecting all available cells.")))
+          pixNewDist <- bestPotential
+          allSelected <- TRUE
+        } else {
+          pixNewDist <- sample(x = bestPotential,
+                               size = length(totPixToChoose),
+                               replace = FALSE)
+        }
       }
       # We then need to identify the adjacent cells, if any of the values of totPixToChoose is > 1
       if (all(any(totPixToChoose > 1),
@@ -800,14 +844,22 @@ generateDisturbances <- function(disturbanceParameters,
                                   directions = nb, pairs = TRUE,
                                   include = FALSE, id = TRUE))
           # Now we sample the number of adjacents needed from the whole table, by ID (each pix that 
-          # needs those adjacents)
-          chosen <- Adj[,.SD[sample(.N, adjN)], by = "id"]
+          # needs those adjacents). If adjN exceeds available neighbours, fall back to sampling
+          # with replacement to keep execution stable.
+          chosen <- Adj[, {
+            n_to_sample <- min(.N, adjN)
+            .SD[sample(.N, n_to_sample, replace = n_to_sample > .N)]
+          }, by = "id"]
           return(c(unique(chosen[["from"]]), unique(chosen[["to"]])))
         })
         allPixAdj <- unique(as.numeric(unlist(allPixAdj)))
         whichPixelsChosen <- c(allPixAdj, pixDontNeedAdj)
       } else {
         whichPixelsChosen <- pixNewDist
+      }
+      # If we ended up with more pixels than requested, trim back to expectedDistPixels
+      if (length(whichPixelsChosen) > expectedDistPixels) {
+        whichPixelsChosen <- sample(whichPixelsChosen, expectedDistPixels)
       }
       # Now, we make a new disturbance layer. We need to keep track of the 
       # old one because we need to connect the new stuff. We can use RTM as a template.
@@ -833,6 +885,7 @@ generateDisturbances <- function(disturbanceParameters,
         totPixBuff <- nPixChosenTotal
         calcPerc <- (totPixBuff - expectedDistPixels)/expectedDistPixels
       } else {
+        totPixBuff <- length(whichPixelsChosen)
         calcPerc <- (length(whichPixelsChosen) - expectedDistPixels)/expectedDistPixels
       }
       
@@ -983,11 +1036,11 @@ generateDisturbances <- function(disturbanceParameters,
             # 4. Update the endLayer with the new connection
             if (!is(connectedOne, "SpatVector"))
               connectedOne <- terra::vect(connectedOne)
-            connectWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
-            if (exists("connected", inherits = FALSE) && !is.null(connected)){
-              connected <- safeMergeSpatVectors(list(connected, connectedOne),
-                                                context = "connecting block merge",
-                                                bufferWidth = connectWidth)
+        connectWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+        if (exists("connected", inherits = FALSE) && !is.null(connected)){
+          connected <- safeMergeSpatVectors(list(connected, connectedOne),
+                                            context = "connecting block merge",
+                                            bufferWidth = connectWidth)
             } else {
               connected <- connectedOne
             }
@@ -1027,15 +1080,18 @@ generateDisturbances <- function(disturbanceParameters,
                                            context = "connecting end lay",
                                            bufferWidth = connectWidth)
           }
-        } 
+        }
         connected[["Class"]] <- classEndLay
         Lay <- list(connected)
         names(Lay) <- disturbanceEnd
         if (disturbanceRateRelatesToBufferedArea){
-          if (length(disturbanceEnd)>1){
-            print("Size > 1. Debug")
-            browser()
-          } 
+          if (length(disturbanceEnd) > 1){
+            warning("[generateDisturbances] Multiple disturbanceEnd targets found (",
+                    paste(disturbanceEnd, collapse = ","), "); using the first entry.",
+                    call. = FALSE)
+            disturbanceEnd <- disturbanceEnd[1]
+            names(Lay) <- disturbanceEnd
+          }
           LayBuff <- terra::buffer(Lay[[disturbanceEnd]], width = 500) # Need to aggregate to avoid double counting!
           LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
           currArea <- sumExpanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW

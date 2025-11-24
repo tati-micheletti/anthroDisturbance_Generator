@@ -1,10 +1,11 @@
 generateLine <- function(angle, length, xlim, ylim, mCrs) {
-  
   if (any(is.na(angle))) stop("angle is NA. Please debug")
   if (any(is.na(xlim))) stop("xlim is NA. Please debug")
   if (any(is.na(ylim))) stop("ylim is NA. Please debug")
-  if (any(is.na(mCrs))) stop("mCrs is NA. Please debug")
   if (any(is.na(length))) stop("length is NA. Please debug")
+
+  crs_val <- tryCatch(terra::crs(mCrs, proj = TRUE), error = function(e) "")
+  if (is.null(crs_val) || !nzchar(crs_val)) stop("mCrs is NA or missing. Please debug")
   
   # additional safeguards
   if (!is.numeric(angle) || length(angle) != 1) {
@@ -36,7 +37,7 @@ generateLine <- function(angle, length, xlim, ylim, mCrs) {
     ncol = 2,
     byrow = TRUE
   )
-  pts <- terra::vect(coords_mat, type = "points", crs = terra::crs(mCrs))
+  pts <- terra::vect(coords_mat, type = "points", crs = crs_val)
   lin <- terra::as.lines(pts)
   lin$Class  <- "Seismic"
   

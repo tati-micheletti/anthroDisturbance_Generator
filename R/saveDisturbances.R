@@ -17,17 +17,32 @@ saveDisturbances <- function(disturbanceList,
       fname <- paste0("disturbances_", sector,
                       if (!is.null(layer)) paste0("_", layer) else "",
                       "_", currentTime, "_", runName, ".shp")
-      terra::writeVector(obj, file.path(Paths$outputPath, fname),
-                         filetype = "ESRI Shapefile", overwrite = overwrite)
+      out_path <- file.path(Paths$outputPath, fname)
+      message(sprintf("Writing vector disturbance to %s", out_path))
+      tryCatch(
+        terra::writeVector(obj, out_path, filetype = "ESRI Shapefile", overwrite = overwrite),
+        error = function(e) stop(sprintf("writeVector failed for %s (%s): %s", out_path, class(obj)[1], conditionMessage(e)))
+      )
     }
     # Raster branch
     else if (any(class(obj) %in% c("RasterLayer", "SpatRaster"))) {
-      if (inherits(obj, "RasterLayer")) obj <- terra::rast(obj)
+      if (!inherits(obj, "SpatRaster")) obj <- terra::rast(obj)
+      lyr_count <- tryCatch(terra::nlyr(obj), error = function(...) NA_integer_)
       fname <- paste0("disturbances_", sector,
                       if (!is.null(layer)) paste0("_", layer) else "",
                       "_", currentTime, "_", runName, ".tif")
-      terra::writeRaster(obj, file.path(Paths$outputPath, fname),
-                         filetype = "GTiff", overwrite = overwrite)
+      out_path <- file.path(Paths$outputPath, fname)
+      if (length(out_path) != 1L) {
+        lay_lbl <- if (is.null(layer)) "NA" else paste(layer, collapse = ";")
+        stop(sprintf("saveDisturbances: expected single filename but got %d for sector=%s layer=%s (run=%s, time=%s)",
+                     length(out_path), sector, lay_lbl, runName, currentTime))
+      }
+      message(sprintf("Writing raster disturbance to %s (layers: %s)",
+                      out_path, lyr_count))
+      tryCatch(
+        terra::writeRaster(obj, out_path, filetype = "GTiff", overwrite = overwrite),
+        error = function(e) stop(sprintf("writeRaster failed for %s (%s, %d layers): %s", out_path, class(obj)[1], lyr_count, conditionMessage(e)))
+      )
     } else {
       stop(sprintf("Objects of class %s can't be used. Please use raster, sp, sf, or terra formats.",
                    paste(class(obj), collapse=",")))

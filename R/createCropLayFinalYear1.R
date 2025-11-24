@@ -55,13 +55,53 @@ createCropLayFinalYear1 <- function(Lay,
   
   # 5) overlap removal (keep your improved NA-angle guard)
   tic("Time elapsed to identify overlapping features: ")
-  overlap_matrix <- terra::relate(x = cropLay, relation = "T********", pairs = TRUE)
-  overlapMatrix  <- data.table::as.data.table(overlap_matrix)
-  overlapMatrix[, self := data.table::fifelse(id.1 == id.2, TRUE, FALSE)]
-  overlapMatrix  <- overlapMatrix[self == FALSE][, self := NULL]
-  # normalize (id.1 < id.2) and unique
-  overlapMatrix  <- unique(overlapMatrix[, .(id.1 = pmin(id.1, id.2),
-                                             id.2 = pmax(id.1, id.2))])
+  overlapMatrix <- data.table::data.table()
+  if (nrow(cropLay) > 1L) {
+    overlapMatrix <- tryCatch({
+      cropLay_sf <- sf::st_as_sf(cropLay)
+      relList <- sf::st_relate(cropLay_sf, pattern = "T********", sparse = TRUE)
+      if (!length(relList)) {
+        data.table::data.table()
+      } else {
+        counts <- lengths(relList)
+        if (!any(counts)) {
+          data.table::data.table()
+        } else {
+          data.table::data.table(
+            id.1 = rep.int(seq_along(relList), counts),
+            id.2 = unlist(relList, use.names = FALSE)
+          )
+        }
+      }
+    }, error = function(e) {
+      if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+        message("[createCropLayFinalYear1] st_relate failed: ", conditionMessage(e),
+                "; falling back to terra::relate for overlap detection.")
+      }
+      fallback <- tryCatch(
+        terra::relate(x = cropLay, relation = "T********", pairs = TRUE),
+        error = function(e2) {
+          warning("createCropLayFinalYear1: overlap detection failed (",
+                  conditionMessage(e2), "); skipping overlap pruning.",
+                  immediate. = TRUE)
+          data.table::data.table()
+        }
+      )
+      data.table::as.data.table(fallback)
+    })
+    overlapMatrix <- data.table::as.data.table(overlapMatrix)
+    if (nrow(overlapMatrix)) {
+      overlapMatrix <- overlapMatrix[id.1 != id.2]
+      if (!nrow(overlapMatrix)) {
+        overlapMatrix <- overlapMatrix[0, ]
+      }
+    }
+    if (nrow(overlapMatrix)) {
+      # normalize (id.1 < id.2) and unique
+      overlapMatrix[, c("id.1", "id.2") := .(pmin(id.1, id.2), pmax(id.1, id.2))]
+      overlapMatrix <- unique(overlapMatrix, by = c("id.1", "id.2"))
+    }
+  }
   to_remove <- integer()
   for (i in seq_len(nrow(overlapMatrix))) {
     if (i %in% c(1, 1000) || i %% 10000 == 0)
@@ -77,6 +117,46 @@ createCropLayFinalYear1 <- function(Lay,
   }
   toc()
   if (length(to_remove)) cropLay <- cropLay[-unique(to_remove), ]
+  
+  # 5a) Ensure all geometries are valid before clustering. Invalid rings coming
+  #      out of the intersect/overlap pruning step can later trigger GEOS/JTS
+  #      shell assertions when we union clusters (observed in eccc_parallel_cluster).
+  #      We first try terra::makeValid for a cheap repair; if that still leaves
+  #      issues fall back to sf/lwgeom and optionally simplify slivers.
+  if (any(!terra::is.valid(cropLay))) {
+    cropLay <- tryCatch({
+      terra::makeValid(cropLay)
+    }, error = function(e) cropLay)
+  }
+  if (any(!terra::is.valid(cropLay))) {
+    cropLay_sf <- sf::st_as_sf(cropLay)
+    make_valid <- function(x) {
+      if (requireNamespace("lwgeom", quietly = TRUE)) {
+        return(suppressWarnings(lwgeom::st_make_valid(x)))
+      }
+      suppressWarnings(sf::st_make_valid(x))
+    }
+    cropLay_sf <- make_valid(cropLay_sf)
+    # When make_valid splits multipart geometries, retain the linework components
+    cropLay_sf <- sf::st_cast(cropLay_sf, "LINESTRING", warn = FALSE)
+    # Drop empty geometries that can be produced by collection extraction
+    cropLay_sf <- cropLay_sf[!sf::st_is_empty(cropLay_sf), , drop = FALSE]
+    # If slivers remain invalid, a light simplify can remove self-overlap spikes
+    if (any(!sf::st_is_valid(cropLay_sf))) {
+      cropLay_sf <- sf::st_simplify(cropLay_sf, dTolerance = 10, preserveTopology = TRUE)
+      cropLay_sf <- make_valid(cropLay_sf)
+      cropLay_sf <- cropLay_sf[!sf::st_is_empty(cropLay_sf), , drop = FALSE]
+    }
+    if (!inherits(cropLay_sf, "SpatVector")) {
+      cropLay <- terra::vect(cropLay_sf)
+    } else {
+      cropLay <- cropLay_sf
+    }
+  }
+  if (nrow(cropLay) == 0L) {
+    warning("createCropLayFinalYear1: geometry repair left no features — returning empty.")
+    return(list(lines = Lay[0, ], availableArea = finalPotLay))
+  }
   
   # 6) cluster by Potential as before
   pots <- unique(cropLay$Potential)
@@ -94,6 +174,19 @@ createCropLayFinalYear1 <- function(Lay,
           totPotential   = length(pots),
           userTags       = studyAreaHash)
   }))
+  
+  # Drop degenerate clusters (e.g., single-line clusters) that can destabilize downstream refinement
+  if ("Pot_Clus" %in% names(cropLayFinal)) {
+    cl_counts <- table(cropLayFinal$Pot_Clus)
+    bad_clusters <- names(cl_counts)[cl_counts < 2]
+    if (length(bad_clusters)) {
+      cropLayFinal <- cropLayFinal[!(cropLayFinal$Pot_Clus %in% bad_clusters), ]
+      if (nrow(cropLayFinal) == 0L) {
+        warning("createCropLayFinalYear1: all clusters dropped as degenerate (<2 lines) — returning empty.")
+        return(list(lines = Lay[0, ], availableArea = finalPotLay))
+      }
+    }
+  }
   
   # 7) consistent list return for updated generator
   return(list(
