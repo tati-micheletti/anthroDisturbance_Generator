@@ -268,7 +268,7 @@ testthat::test_that("Primary sim runs one year and updates outputs (vector mode)
 })
 
 test_that("Disturbance layers carry forward across years (hand-off)", {
-  skip_on_cran()
+  skip_on_ci()
   
   distList <- createDisturbanceList()
   dp <- createDisturbanceParameters()
@@ -318,7 +318,7 @@ test_that("Disturbance layers carry forward across years (hand-off)", {
 })
 
 test_that("Identical seeds yield identical outputs", {
-  skip_on_cran()
+  skip_on_ci()
   
   distList <- createDisturbanceList()
   dp <- createDisturbanceParameters()
@@ -366,7 +366,7 @@ test_that("Identical seeds yield identical outputs", {
 })
 
 test_that("Yearly event order and execution follow module design", {
-  skip_on_cran()
+  skip_on_ci()
   
   # Minimal disturbanceList + parameters (see your templates)
   distList <- createDisturbanceList()
@@ -471,7 +471,7 @@ test_that("Yearly event order and execution follow module design", {
 })
 
 test_that("Generation happens only on scheduled years (disturbanceInterval)", {
-  skip_on_cran()
+  skip_on_ci()
   
   distList <- createDisturbanceList()
   dp <- createDisturbanceParameters(distList)

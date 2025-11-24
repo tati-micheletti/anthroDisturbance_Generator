@@ -55,7 +55,7 @@ replaceListFast <- function(disturbanceList,
       # layName <- names(upToDate)
       # # Currently disturbed NULL
       # unified <- disturbanceList[[Sector]][[layName]]
-      return(NULL) #TODO NEEDS TESTS!
+      return(NULL)
     } else {
       names(upToDate) <- NULL # We need to remove the SECTOR names and unlist in case these two lists repeat the names.
       upToDate <- unlist(upToDate)

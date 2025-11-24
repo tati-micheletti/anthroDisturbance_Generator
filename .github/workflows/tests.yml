@@ -17,6 +17,10 @@ env:
   COVERAGE_MIN: 70
   HEAVY_TESTS: test-generateDisturbances.R,test-generateDisturbancesShp.R,test-anthroDisturbance_Generator.R
   AGGREGATE_REPO: RonCatK/RonCatK-anthroDisturbance_Thesis
+  R_PROFILE_USER: /dev/null
+  R_PROFILE: /dev/null
+  R_ENVIRON_USER: /dev/null
+  R_ENVIRON: /dev/null
 
 jobs:
   tests:
@@ -28,12 +32,28 @@ jobs:
           submodules: recursive
 
       - name: Set mode
-        run: echo "MODE=${{ github.event.inputs.mode || 'light' }}" >> "$GITHUB_ENV"
+        run: |
+          MODE="${{ github.event.inputs.mode || 'light' }}"
+          [ -z "$MODE" ] && MODE="light"
+          echo "MODE=$MODE" >> "$GITHUB_ENV"
+
+      - name: Prepare R library path
+        run: |
+          echo "R_LIBS_USER=$RUNNER_TEMP/Rlibs" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/Rlibs"
 
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
+
+      - name: Pre-install Require (vanilla)
+        run: |
+          Rscript --vanilla - <<'RS'
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          if (!requireNamespace("Require", quietly = TRUE)) install.packages("Require")
+          if (!requireNamespace("Require", quietly = TRUE)) quit(status = 1)
+          RS
 
       - name: Install light dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -54,6 +74,7 @@ jobs:
             any::crayon
             any::msm
             any::doParallel
+            any::doSNOW
             any::foreach
             any::dplyr
             any::sp
@@ -62,6 +83,18 @@ jobs:
             any::Require
             any::fasterize
             any::truncnorm
+            any::xml2
+            any::DT
+            any::htmltools
+            any::htmlwidgets
+
+      - name: Ensure Require present
+        run: |
+          Rscript - <<'RS'
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          if (!requireNamespace("Require", quietly = TRUE)) install.packages("Require")
+          if (!requireNamespace("Require", quietly = TRUE)) quit(status = 1)
+          RS
 
       - name: Install heavy dependencies
         if: ${{ env.MODE == 'heavy' }}
@@ -76,19 +109,25 @@ jobs:
         env:
           MODE: ${{ env.MODE }}
         run: |
+          MODE=${MODE:-light}
           mkdir -p artifacts/tests/"$MODE"
           Rscript - <<'RS'
           suppressPackageStartupMessages({
-            library(testthat)
-            library(covr)
-            library(withr)
+            pkgs <- c(
+              "covr", "DT", "htmltools", "htmlwidgets", "testthat",
+              "terra", "data.table", "qs", "sf", "withr", "reproducible",
+              "raster", "tictoc", "mockery", "digest", "crayon", "msm",
+              "doParallel", "foreach", "dplyr", "sp", "stringi", "zip",
+              "Require"
+            )
+            invisible(lapply(pkgs, library, character.only = TRUE))
           })
           mode <- Sys.getenv("MODE", "light")
           coverage_min <- as.numeric(Sys.getenv("COVERAGE_MIN", "0"))
           heavy_tests <- strsplit(Sys.getenv("HEAVY_TESTS", ""), ",", fixed = TRUE)[[1]]
           heavy_tests <- trimws(heavy_tests[heavy_tests != ""])
 
-          report_dir <- file.path("artifacts", "tests", mode)
+          report_dir <- normalizePath(file.path("artifacts", "tests", mode), mustWork = FALSE)
           dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
 
           test_dir <- file.path("tests", "testthat")
@@ -113,17 +152,22 @@ jobs:
           sink(log_path, split = TRUE)
           on.exit({ while (sink.number() > 0) sink() }, add = TRUE)
 
+          if (!exists(".robustDigest", inherits = FALSE)) {
+            assign(".robustDigest", digest::digest, envir = .GlobalEnv)
+          }
+
           reporter <- testthat::MultiReporter$new(list(
             testthat::SummaryReporter$new(),
             testthat::JunitReporter$new(file = junit_path)
           ))
-          testthat::test_files(
-            test_paths = test_files,
-            test_dir = test_dir,
-            reporter = reporter,
-            stop_on_failure = TRUE,
-            stop_on_warning = FALSE
-          )
+          for (tf in test_files) {
+            testthat::test_file(
+              tf,
+              reporter = reporter,
+              stop_on_failure = TRUE,
+              stop_on_warning = FALSE
+            )
+          }
 
           cov <- covr::file_coverage(r_scripts, test_files)
           cov_pct <- covr::percent_coverage(cov)

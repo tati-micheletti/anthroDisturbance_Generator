@@ -25,11 +25,11 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
-  reqdPkgs = list("SpaDES.core", "ggplot2", "googledrive",
+  reqdPkgs = list("SpaDES.core", "googledrive",
                   "data.table", "reproducible", "geodata",
-                  "raster", "terra", "crayon", "msm", "sf", "pik-piam/rmndt",
-                  "fasterize", "stars", "nngeo", "tictoc", "roads", "truncnorm",
-                  "foreach", "doParallel", "digest"), #TODO review needed packages.
+                  "raster", "terra", "crayon", "msm", "sf",
+                  "fasterize", "tictoc", "roads", "truncnorm",
+                  "foreach", "doParallel", "digest", "ggplot2"),
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),

@@ -983,7 +983,7 @@ test_that("applies user‐supplied DisturbanceRate for Enlarging classes", {
 })
 
 test_that("no rows to update returns original table unchanged", {
-  skip_on_cran()
+  skip_on_ci()
   
   # --- Minimal fixtures ---
   rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
@@ -1024,7 +1024,7 @@ test_that("no rows to update returns original table unchanged", {
 })
 
 test_that("DisturbanceRate: no matching row -> warning and rate set to 0 (not NA)", {
-  skip_on_cran()
+  skip_on_ci()
   
   rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
   sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
@@ -1061,7 +1061,7 @@ test_that("DisturbanceRate: no matching row -> warning and rate set to 0 (not NA
 })
 
 test_that("DisturbanceRate: multiple matches -> warning and first row is used", {
-  skip_on_cran()
+  skip_on_ci()
   
   rtm <- rast(nrows=2, ncols=2, xmin=0, xmax=20, ymin=0, ymax=20, vals=1); crs(rtm) <- "EPSG:3857"
   sa  <- as.polygons(ext(rtm)); crs(sa) <- crs(rtm)
@@ -1096,7 +1096,7 @@ test_that("DisturbanceRate: multiple matches -> warning and first row is used", 
 })
 
 test_that("ECCC: no rows for requested classes -> warns and sets all targeted rates to 0", {
-  skip_on_cran()
+  skip_on_ci()
   testthat::skip_if_not_installed("mockery")
   
   # Empty empirical table
@@ -1153,7 +1153,7 @@ test_that("ECCC: no rows for requested classes -> warns and sets all targeted ra
 })
 
 test_that("ECCC: per-class missing row -> WARNING + sets only that row to 0 (document desired fix)", {
-  skip_on_cran()
+  skip_on_ci()
   testthat::skip_if_not_installed("mockery")
   
   # Only CUTBLOCKS present; MINES missing

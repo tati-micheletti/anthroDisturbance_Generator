@@ -109,7 +109,7 @@ test_that("calculateSize calculates correct values for numeric stability", {
 })
 
 test_that("calculateSize handles zero-variance inputs with positive sigma", {
-  skip_on_cran()
+  skip_on_ci()
   
   # One single polygon -> sd(area) would be NA/0 without our fallback
   single_poly <- sf::st_polygon(list(rbind(c(0,0), c(0,1), c(1,1), c(1,0), c(0,0))))

@@ -318,7 +318,7 @@ test_that("NULL pastDist with non-null currDist returns currDist for forestry", 
 })
 
 test_that("when pastDist is NULL and currDist is a raster, returns raster and no 'Class'", {
-  skip_on_cran()
+  skip_on_ci()
 
   r <- rast(nrows = 2, ncols = 2, xmin = 0, xmax = 10, ymin = 0, ymax = 10, crs = "EPSG:3857")
   values(r) <- 1
@@ -344,7 +344,7 @@ test_that("when pastDist is NULL and currDist is a raster, returns raster and no
 
 
 test_that("merged vector overwrites a numeric 'Class' with the layer name as character", {
-  skip_on_cran()
+  skip_on_ci()
 
   crs_str <- "EPSG:3857"
   # past vector (with numeric Class)

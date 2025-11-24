@@ -4,6 +4,7 @@ generateLine <- function(angle, length, xlim, ylim, mCrs) {
   if (any(is.na(ylim))) stop("ylim is NA. Please debug")
   if (any(is.na(length))) stop("length is NA. Please debug")
 
+  if (missing(mCrs) || any(is.na(mCrs))) stop("mCrs is NA or missing. Please debug")
   crs_val <- tryCatch(terra::crs(mCrs, proj = TRUE), error = function(e) "")
   if (is.null(crs_val) || !nzchar(crs_val)) stop("mCrs is NA or missing. Please debug")
   
