@@ -1,0 +1,155 @@
+name: Tests and Coverage
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Test mode (light skips heavy/long cases)"
+        required: false
+        default: light
+        type: choice
+        options: [light, heavy]
+
+env:
+  COVERAGE_MIN: 70
+  HEAVY_TESTS: test-generateDisturbances.R,test-generateDisturbancesShp.R,test-anthroDisturbance_Generator.R
+  AGGREGATE_REPO: RonCatK/RonCatK-anthroDisturbance_Thesis
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set mode
+        run: echo "MODE=${{ github.event.inputs.mode || 'light' }}" >> "$GITHUB_ENV"
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Install light dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::covr
+            any::testthat
+            any::withr
+            any::terra
+            any::data.table
+            any::qs
+            any::sf
+            any::reproducible
+            any::raster
+            any::tictoc
+            any::mockery
+            any::digest
+            any::crayon
+            any::msm
+            any::doParallel
+            any::foreach
+            any::dplyr
+            any::sp
+            any::stringi
+            any::zip
+            any::Require
+            any::fasterize
+            any::truncnorm
+
+      - name: Install heavy dependencies
+        if: env.MODE == 'heavy'
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::SpaDES.core
+            any::SpaDES.tools
+            any::spaths
+
+      - name: Run tests and coverage
+        env:
+          MODE: ${{ env.MODE }}
+        run: |
+          mkdir -p artifacts/tests/"$MODE"
+          Rscript - <<'RS'
+          suppressPackageStartupMessages({
+            library(testthat)
+            library(covr)
+            library(withr)
+          })
+          mode <- Sys.getenv("MODE", "light")
+          coverage_min <- as.numeric(Sys.getenv("COVERAGE_MIN", "0"))
+          heavy_tests <- strsplit(Sys.getenv("HEAVY_TESTS", ""), ",", fixed = TRUE)[[1]]
+          heavy_tests <- trimws(heavy_tests[heavy_tests != ""])
+
+          report_dir <- file.path("artifacts", "tests", mode)
+          dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
+
+          test_dir <- file.path("tests", "testthat")
+          test_files <- list.files(test_dir, pattern = "^test-.*\\.R$", full.names = TRUE)
+          if (mode == "light" && length(heavy_tests)) {
+            test_files <- test_files[!basename(test_files) %in% heavy_tests]
+          }
+
+          Paths <<- list(inputPath = tempdir(), outputPath = tempdir())
+          r_scripts <- list.files("R", pattern = "\\.R$", full.names = TRUE)
+          invisible(lapply(r_scripts, source))
+          helper_files <- list.files(test_dir, pattern = "^helper-.*\\.R$", full.names = TRUE)
+          if (length(helper_files)) lapply(helper_files, source)
+
+          if (!length(test_files)) {
+            writeLines("No tests selected for this mode.", file.path(report_dir, "tests.log"))
+            quit(status = 0)
+          }
+
+          log_path <- file.path(report_dir, "tests.log")
+          junit_path <- file.path(report_dir, "tests.xml")
+          sink(log_path, split = TRUE)
+          on.exit({ while (sink.number() > 0) sink() }, add = TRUE)
+
+          reporter <- testthat::MultiReporter$new(list(
+            testthat::SummaryReporter$new(),
+            testthat::JunitReporter$new(file = junit_path)
+          ))
+          testthat::test_files(
+            test_paths = test_files,
+            test_dir = test_dir,
+            reporter = reporter,
+            stop_on_failure = TRUE,
+            stop_on_warning = FALSE
+          )
+
+          cov <- covr::file_coverage(r_scripts, test_files)
+          cov_pct <- covr::percent_coverage(cov)
+          covr::report(cov, file = file.path(report_dir, "coverage.html"), browse = FALSE)
+          writeLines(sprintf("coverage: %.2f%%", cov_pct), file.path(report_dir, "coverage.txt"))
+
+          if (cov_pct < coverage_min) {
+            stop(sprintf("Coverage %.2f%% below threshold %.2f%%", cov_pct, coverage_min))
+          }
+          RS
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-${{ env.MODE }}
+          path: artifacts/tests/${{ env.MODE }}
+          if-no-files-found: warn
+
+      - name: Dispatch aggregator (optional)
+        if: env.AGGREGATE_REPO != '' && env.MODE != '' && secrets.AGGREGATOR_TOKEN != ''
+        run: |
+          COVERAGE=$(grep -o '[0-9.]*' artifacts/tests/"$MODE"/coverage.txt | head -n1)
+          payload=$(jq -n --arg module "anthroDisturbance_Generator" --arg mode "$MODE" --arg coverage "$COVERAGE" '{module:$module,mode:$mode,coverage:$coverage}')
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.AGGREGATOR_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ env.AGGREGATE_REPO }}/dispatches \
+            -d "{\"event_type\":\"module-ci-report\",\"client_payload\":$payload}"
