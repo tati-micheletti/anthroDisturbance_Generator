@@ -31,6 +31,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install system libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev gdal-bin libgeos-dev
+
       - name: Set mode
         run: |
           MODE="${{ github.event.inputs.mode || 'light' }}"
