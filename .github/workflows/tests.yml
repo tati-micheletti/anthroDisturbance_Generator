@@ -93,6 +93,13 @@ jobs:
             any::htmltools
             any::htmlwidgets
 
+      - name: Print spatial diagnostics
+        run: |
+          gdal-config --version
+          gdal-config --datadir
+          projinfo EPSG:32633 | head
+          echo "PROJ_LIB=$PROJ_LIB"
+
       - name: Ensure Require present
         run: |
           Rscript - <<'RS'
@@ -126,6 +133,9 @@ jobs:
               "Require"
             )
             invisible(lapply(pkgs, library, character.only = TRUE))
+            cat("terra version:", terra::terraVersion(), "\n")
+            print(sf::sf_extSoftVersion())
+            cat("PROJ_LIB=", Sys.getenv("PROJ_LIB"), "\n")
           })
           mode <- Sys.getenv("MODE", "light")
           coverage_min <- as.numeric(Sys.getenv("COVERAGE_MIN", "0"))
