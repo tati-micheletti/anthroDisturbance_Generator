@@ -95,7 +95,7 @@ defineModule(sim, list(
                            "new disturbances type Enlarging for lines. Defaults to NA, which lets ",
                            "the module estimate a reasonable step (notably for seismic clustering). ",
                            "If the iterations take too long, set a larger fixed value; if the ",
-                           "summarized value is too far from 0, set a smaller fixed value.")),
+                           "summarized value is too large, set a smaller fixed value.")),
     defineParameter("connectingBlockSize", "numeric", NULL, NA, NA,
                     paste0("connectingBlockSize defaults to NULL. It is used to connecting layers ",
                            "after generation. Applying blocking technique speeds up disturbance.",

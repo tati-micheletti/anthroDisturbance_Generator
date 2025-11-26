@@ -10,7 +10,7 @@ test_that("generateLine handles NA inputs correctly", {
   expect_error(generateLine(45, 10, c(0, 10), NA, "EPSG:4326"), "ylim is NA. Please debug")
   
   # Test NA crs
-  expect_error(generateLine(45, 10, c(0, 10), c(0, 10), NA), "mCrs is NA. Please debug")
+  expect_error(generateLine(45, 10, c(0, 10), c(0, 10), NA), "mCrs is NA or missing. Please debug")
   
   # Test NA length
   expect_error(generateLine(45, NA, c(0, 10), c(0, 10), "EPSG:4326"), "length is NA. Please debug")
