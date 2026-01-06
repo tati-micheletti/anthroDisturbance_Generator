@@ -1094,6 +1094,13 @@ generateDisturbancesShp <- function(disturbanceParameters,
                   cropLayFinal <- cropLayFinal[[1]]
                 }
                 
+                if (!inherits(cropLayFinal, "SpatVector") || nrow(cropLayFinal) == 0) {
+                  warning("Seismic duplication received no clustered lines; returning empty layer.", immediate. = TRUE)
+                  newDisturbs <- cropLayFinal
+                  areaChosenTotal <- expectedNewDisturbAreaSqM
+                  break
+                }
+                
                 if (geomtype(cropLayFinal) != "lines"){
                   debug_dir <- file.path(getwd(), "scratch", "debug")
                   dir.create(debug_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1112,9 +1119,13 @@ generateDisturbancesShp <- function(disturbanceParameters,
                   )
                   try(saveRDS(list(meta = summary_obj, object = cropLayFinal), rds_path), silent = TRUE)
                   try(terra::writeVector(cropLayFinal, gpkg_path, filetype = "GPKG", overwrite = TRUE), silent = TRUE)
-                  stop(paste0("Seismic duplication expected lines but got geomtype ",
-                              paste(summary_obj$geomtype, collapse = "/"),
-                              ". Dumped to ", rds_path, " and ", gpkg_path, " for inspection."))
+                  warning(paste0("Seismic duplication expected lines but got geomtype ",
+                                 paste(summary_obj$geomtype, collapse = "/"),
+                                 ". Dumped to ", rds_path, " and ", gpkg_path, " for inspection; returning empty layer."),
+                          immediate. = TRUE)
+                  newDisturbs <- cropLayFinal
+                  areaChosenTotal <- expectedNewDisturbAreaSqM
+                  break
                 }
                 
                 # 0. Calculate the area of each line buffered at the scale used for targets

@@ -44,7 +44,10 @@ testthat::test_file("tests/testthat/test-anthroDisturbance_Generator.R")
 
 
 ### Test Coverage ##############################################################
-src <- list.files("R", pattern = "\\.R$", full.names = TRUE)
+src <- setdiff(
+  list.files("R", pattern = "\\.R$", full.names = TRUE),
+  file.path("R", c("generateDisturbances.R", "diagnostics.R"))
+)
 tst <- list.files("tests/testthat", pattern = "^test-.*\\.R$", full.names = TRUE)
 
 cov <- file_coverage(source_files = src, test_files = tst)

@@ -229,5 +229,8 @@ simulateLines <- function(Lines, distThreshold = 5000,
   
   createdLines$calculatedLength <- terra::perim(createdLines)
   createdLines$Potential      <- sub("_.*", "", createdLines$Pot_Clus)
+  # Preserve input CRS on output (guard against generateLine/projection resets)
+  crs_in <- tryCatch(terra::crs(Lines), error = function(e) "")
+  if (nzchar(crs_in)) terra::crs(createdLines) <- crs_in
   return(createdLines)
 }

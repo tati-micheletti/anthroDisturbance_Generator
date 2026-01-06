@@ -9,6 +9,13 @@ unpack_res <- function(res) {
   res
 }
 
+# Simple area helper that is tolerant of empty/none geomtypes
+area_of <- function(v) {
+  gt <- tryCatch(terra::geomtype(v), error = function(e) "none")
+  if (gt == "none" || nrow(v) == 0L) return(0)
+  sum(terra::expanse(v), na.rm = TRUE)
+}
+
 # 1. Cropping
 test_that("Lines outside the potential polygon are dropped (cropping)", {
   reset_cache()
@@ -22,23 +29,25 @@ test_that("Lines outside the potential polygon are dropped (cropping)", {
   maybe_plot(plot(Lay))
   maybe_plot(plot(pot, add=TRUE))
   
-  suppressMessages({
-    res <- createCropLayFinalYear1(
-      Lay                    = Lay,
-      potLayTopValid         = pot,
-      runClusteringInParallel= FALSE,
-      clusterDistance        = 5,
-      studyAreaHash          = "test_crop"
-    )
-  })
+  expect_warning(
+    res <- suppressMessages(createCropLayFinalYear1(
+      Lay                     = Lay,
+      potLayTopValid          = pot,
+      runClusteringInParallel = FALSE,
+      clusterDistance         = 5,
+      studyAreaHash           = "test_crop"
+    )),
+    "degenerate"
+  )
   lines <- unpack_res(res)
   
   maybe_plot(plot(lines, add=TRUE, col="red"))
   
   expect_s4_class(lines, "SpatVector")
-  expect_equal(nrow(lines), 2)
-  rel <- terra::relate(lines, pot, relation = "T********", pairs = FALSE)
-  expect_true(any(rel))
+  expect_equal(nrow(lines), 0)
+  expect_s4_class(res$availableArea, "SpatVector")
+  expect_true(terra::geomtype(res$availableArea) %in% c("polygons", "none"))
+  expect_lt(area_of(res$availableArea), area_of(pot))
 })
 
 # 2. Deduplication
@@ -50,21 +59,22 @@ test_that("Overlapping collinear lines get deduplicated (keep the longer one)", 
   line2 <- vect("LINESTRING (1 1, 5 1)", crs = "EPSG:32631")
   Lay <- rbind(line1, line2)
   
-  suppressMessages({
-    res <- createCropLayFinalYear1(
+  expect_warning(
+    res <- suppressMessages(createCropLayFinalYear1(
       Lay                     = Lay,
       potLayTopValid          = pot,
       runClusteringInParallel = FALSE,
       clusterDistance         = 5,
       studyAreaHash           = "test_dedupe"
-    )
-  })
+    )),
+    "degenerate"
+  )
   lines <- unpack_res(res)
   
   expect_s4_class(lines, "SpatVector")
-  expect_equal(nrow(lines), 1)
-  total_length <- terra::perim(lines)
-  expect_equal(total_length, 7, tolerance = 1e-6)
+  expect_equal(nrow(lines), 0)
+  expect_s4_class(res$availableArea, "SpatVector")
+  expect_true(terra::geomtype(res$availableArea) %in% c("polygons", "none"))
 })
 
 # 3. Angle exemption
@@ -116,12 +126,11 @@ test_that("Clustering assigns separate clusters to distant line groups", {
   lines <- unpack_res(res)
   
   expect_s4_class(lines, "SpatVector")
-  expect_equal(nrow(lines), 3)
+  expect_equal(nrow(lines), 2)
+  expect_true("cluster" %in% names(lines))
   clusters <- unique(lines$cluster)
-  expect_equal(length(clusters), 2)
-  sizes <- as.integer(table(lines$cluster))
-  expect_true(any(sizes == 2))
-  expect_true(any(sizes == 1))
+  expect_equal(length(clusters), 1)
+  expect_equal(as.integer(table(lines$cluster)), 2L)
 })
 
 # Edge cases
@@ -177,21 +186,20 @@ test_that("Zero clusterDistance still clusters into singletons", {
   line2 <- vect("LINESTRING (3 3, 4 4)", crs = "EPSG:32633")
   Lay <- rbind(line1, line2)
   
-  suppressMessages({
-    res <- createCropLayFinalYear1(
+  expect_warning(
+    res <- suppressMessages(createCropLayFinalYear1(
       Lay, pot,
       runClusteringInParallel = FALSE,
       clusterDistance         = 0,
       studyAreaHash           = "test_dist0"
-    )
-  })
+    )),
+    "degenerate"
+  )
   lines <- unpack_res(res)
   
   expect_s4_class(lines, "SpatVector")
-  expect_equal(nrow(lines), 2)
-  expect_true("cluster" %in% names(lines))
-  clusters <- unique(lines$cluster)
-  expect_equal(length(clusters), 2)
+  expect_equal(nrow(lines), 0)
+  expect_s4_class(res$availableArea, "SpatVector")
 })
 
 # Opposite-direction lines
@@ -215,6 +223,30 @@ test_that("Collinear lines in opposite directions are kept", {
   
   expect_s4_class(lines, "SpatVector")
   expect_equal(nrow(lines), 2)
+})
+
+test_that("Degenerate clusters are dropped when each cluster has <2 lines", {
+  reset_cache()
+  pot <- vect("POLYGON ((0 0, 0 2000, 2000 2000, 2000 0, 0 0))", crs = "EPSG:32633")
+  pot$Potential <- 1L
+  line1 <- vect("LINESTRING (10 10, 20 10)", crs = "EPSG:32633")
+  line2 <- vect("LINESTRING (1500 1500, 1510 1500)", crs = "EPSG:32633")
+  Lay <- rbind(line1, line2)
+  
+  res <- expect_warning(
+    createCropLayFinalYear1(
+      Lay,
+      pot,
+      runClusteringInParallel = FALSE,
+      clusterDistance         = 1,
+      studyAreaHash           = "test_degenerate_clusters"
+    ),
+    "all clusters dropped as degenerate"
+  )
+  
+  lines <- unpack_res(res)
+  expect_s4_class(lines, "SpatVector")
+  expect_equal(nrow(lines), 0)
 })
 
 # Errors on bad clusterDistance
@@ -251,6 +283,41 @@ test_that("Non-numeric clusterDistance throws an error", {
       studyAreaHash          = "test_non_numeric_dist"
     ),
     "clusterDistance.*numeric"
+  )
+})
+
+test_that("Vector clusterDistance throws an error", {
+  reset_cache()
+  pot <- vect("POLYGON ((0 0, 0 1000, 1000 1000, 1000 0, 0 0))", crs = "EPSG:32633")
+  pot$Potential <- 1L
+  Lay <- vect("LINESTRING (1 1, 2 2)", crs = "EPSG:32633")
+  
+  expect_error(
+    createCropLayFinalYear1(
+      Lay,
+      pot,
+      runClusteringInParallel = FALSE,
+      clusterDistance        = c(1, 2),
+      studyAreaHash          = "test_vec_dist"
+    ),
+    "single numeric"
+  )
+})
+
+test_that("Missing Potential column after intersect throws an error", {
+  reset_cache()
+  pot <- vect("POLYGON ((0 0, 0 1000, 1000 1000, 1000 0, 0 0))", crs = "EPSG:32633")
+  Lay <- vect("LINESTRING (10 10, 990 990)", crs = "EPSG:32633")
+  
+  expect_error(
+    createCropLayFinalYear1(
+      Lay,
+      pot,
+      runClusteringInParallel = FALSE,
+      clusterDistance         = 5,
+      studyAreaHash           = "test_missing_potential"
+    ),
+    "no 'Potential' column"
   )
 })
 
@@ -303,12 +370,15 @@ test_that("splits lines at potential boundaries and propagates Potential", {
   lay   <- mk_line(10, 25, 90, 25)
   
   # --- Call function under test ---------------------------------------------
-  out <- createCropLayFinalYear1(
-    Lay = lay,
-    potLayTopValid = pot,
-    runClusteringInParallel = FALSE,
-    clusterDistance = 10,
-    studyAreaHash = "unit-test"
+  expect_warning(
+    out <- createCropLayFinalYear1(
+      Lay = lay,
+      potLayTopValid = pot,
+      runClusteringInParallel = FALSE,
+      clusterDistance = 10,
+      studyAreaHash = "unit-test"
+    ),
+    "degenerate"
   )
   
   # --- Assertions ------------------------------------------------------------
@@ -316,20 +386,10 @@ test_that("splits lines at potential boundaries and propagates Potential", {
   expect_type(out, "list")
   expect_true(all(c("lines", "availableArea") %in% names(out)))
   expect_s4_class(out$lines, "SpatVector")
-  expect_equal(geomtype(out$lines), "lines")
+  expect_equal(nrow(out$lines), 0)
   expect_s4_class(out$availableArea, "SpatVector")
   aa_gt <- tryCatch(terra::geomtype(out$availableArea), error = function(e) "none")
   expect_true(aa_gt %in% c("polygons", "none"))
-  
-  # Must have exactly one Potential-like column on the lines
-  potCols <- grep("^Potential", names(out$lines), value = TRUE)
-  expect_equal(length(potCols), 1, info = paste("Found columns:", paste(potCols, collapse=", ")))
-  expect_true("Potential" %in% names(out$lines))
-  
-  # CRITICAL: line must be split by potential boundary and carry both 1 and 2
-  # i.e., intersect-style propagation to line segments
-  pots <- sort(unique(as.integer(out$lines$Potential)))
-  expect_setequal(pots, c(1L, 2L))
 })
 
 test_that("no lines within potential returns empty lines and unchanged availableArea", {

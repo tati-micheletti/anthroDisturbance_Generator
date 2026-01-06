@@ -286,24 +286,32 @@ testthat::test_that("Forestry Generating avoids burned cells", {
   expect_lt(burned / total_new, 0.5)
 })
 
-# ============================================================
-# 4) Probability: prefers higher potential (right half)
-# ============================================================
-testthat::test_that("Generating prefers higher-Potential half (right)", {
-  skip_if_missing_generate_deps()
-  distList <- distList_base
-  pot <- distList$forestry$potentialCutblocks
-  e <- ext(pot); midx <- (xmin(e) + xmax(e)) / 2
-  left  <- terra::as.polygons(terra::ext(xmin(e), midx, ymin(e), ymax(e)));  terra::crs(left)  <- terra::crs(pot)
-  right <- terra::as.polygons(terra::ext(midx, xmax(e), ymin(e), ymax(e)));   terra::crs(right) <- terra::crs(pot)
-  potL <- intersect(pot, left);  if (nrow(potL) > 0) potL$Potential <- 1L
-  potR <- intersect(pot, right); if (nrow(potR) > 0) potR$Potential <- 5L
-  distList$forestry$potentialCutblocks <- if (nrow(potL) == 0) potR else if (nrow(potR) == 0) potL else rbind(potL, potR)
-  
-  dp <- rbindlist(list(
-    dp_generating_forestry(1.4, "10000"),
-    dp_generating_mining(0.2, "100"),
-    dp_connect_cutblocks_to_roads(),
+  # ============================================================
+  # 4) Probability: prefers higher potential (right half)
+  # ============================================================
+  testthat::test_that("Generating prefers higher-Potential half (right)", {
+    skip_if_missing_generate_deps()
+    distList <- distList_base
+    # Force a two-polygon potential so both halves always exist
+    e <- ext(r); midx <- (xmin(e) + xmax(e)) / 2
+    mk_sq <- function(x0, y0, size, pot) {
+      v <- terra::vect(matrix(c(x0,y0, x0+size,y0, x0+size,y0+size, x0,y0+size, x0,y0),
+                              ncol = 2, byrow = TRUE),
+                       type = "polygons",
+                       crs  = terra::crs(pot))
+      v$Potential <- pot
+      v$Class <- "potentialCutblocks"
+      v$ORIGIN <- 1900L
+      v
+    }
+    left  <- mk_sq(0,   0, size = 500, pot = 1L)
+    right <- mk_sq(500, 0, size = 500, pot = 5L)
+    distList$forestry$potentialCutblocks <- rbind(left, right)
+    
+    dp <- rbindlist(list(
+      dp_generating_forestry(1.4, "10000"),
+      dp_generating_mining(0.2, "100"),
+      dp_connect_cutblocks_to_roads(),
     dp_connect_mining_to_roads()
   ), fill = TRUE)
   
