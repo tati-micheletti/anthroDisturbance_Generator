@@ -133,7 +133,7 @@ jobs:
               "Require"
             )
             invisible(lapply(pkgs, library, character.only = TRUE))
-            cat("terra version:", utils::packageVersion("terra"), "\n")
+            cat("terra version:", as.character(utils::packageVersion("terra")), "\n")
             print(sf::sf_extSoftVersion())
             cat("PROJ_LIB=", Sys.getenv("PROJ_LIB"), "\n")
           })
