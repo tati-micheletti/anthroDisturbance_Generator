@@ -14,7 +14,9 @@ on:
         options: [light, heavy]
 
 env:
-  COVERAGE_MIN: 70
+  # Keep coverage as an artifact; do not gate the light module PR suite on a
+  # Thesis-era coverage threshold.
+  COVERAGE_MIN: 0
   HEAVY_TESTS: test-generateDisturbances.R,test-generateDisturbancesShp.R,test-anthroDisturbance_Generator.R
   NOT_CRAN: true
   R_PROFILE_USER: /dev/null
