@@ -71,10 +71,7 @@ jobs:
       - name: Install light dependencies
         run: |
           Rscript --vanilla - <<'RS'
-          options(
-            pkgType = "binary",
-            repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/2026-01-05")
-          )
+          options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/2026-01-05"))
           cran_packages <- c(
             "covr", "testthat", "withr", "terra", "data.table",
             "qs", "sf", "reproducible", "raster", "tictoc", "mockery",
@@ -110,7 +107,7 @@ jobs:
           options(repos = c(
             PredictiveEcology = "https://predictiveecology.r-universe.dev",
             CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/2026-01-05"
-          ), pkgType = "binary")
+          ))
           packages <- c("SpaDES.core", "SpaDES.tools", "spaths")
           missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly = TRUE)]
           if (length(missing)) install.packages(missing)
