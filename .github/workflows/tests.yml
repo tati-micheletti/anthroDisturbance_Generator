@@ -42,7 +42,8 @@ jobs:
             libudunits2-dev \
             libcurl4-openssl-dev \
             libssl-dev \
-            libxml2-dev
+            libxml2-dev \
+            libglpk-dev
 
       - name: Set mode
         run: |
