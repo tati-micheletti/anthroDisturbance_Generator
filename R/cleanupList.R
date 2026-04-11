@@ -2,45 +2,43 @@ cleanupList <- function(aList,
                         outter = FALSE, 
                         inner = TRUE, 
                         cleanEmpty = FALSE, 
-                        nullEmpty = TRUE){
-  if (inner){
-    cleanedList1 <- lapply(aList, function(innerList) {
-      filtered_list <- Filter(Negate(is.null), innerList)
-      if (length(filtered_list) == 0) {
-        NULL # Return NULL if the list is empty after filtering
+                        nullEmpty = TRUE) {
+  # Step 1: Deep copy input once (protect spatial data integrity)
+  tempList <- copy(aList)
+  
+  # Step 2: Inner-level NULL removal (preserve NULL elements)
+  if (inner) {
+    tempList <- lapply(tempList, function(innerList) {
+      if (is.null(innerList)) return(NULL)
+      if (!is.list(innerList)) return(innerList)
+      Filter(Negate(is.null), innerList)
+    })
+  }
+  
+  # Step 3: Top-level NULL removal
+  if (outter) {
+    tempList <- Filter(Negate(is.null), tempList)
+  }
+  
+  # Step 4: Convert empty lists to NULL
+  if (nullEmpty) {
+    tempList <- lapply(tempList, function(x) {
+      if (is.list(x) && length(x) == 0) {
+        NULL
       } else {
-        filtered_list # Otherwise, return the filtered list
+        x
       }
     })
-  } else {
-    cleanedList1 <- copy(aList)
-  }
-  if (outter){
-    cleanedList2 <- Filter(Negate(is.null), cleanedList1)
-  } else {
-    cleanedList2 <- copy(cleanedList1)
   }
   
-  if (nullEmpty){
-    cleanedListFinal1 <- lapply(cleanedList2, function(x) {
-      if (is.list(x) && length(x) == 0) {
-        # If it is, return NULL
-        return(NULL)
-        } else {
-        # Otherwise, return the element unchanged
-        return(x)
-      }
-    })  } else {
-    cleanedListFinal1 <- copy(cleanedList2)
+  # Step 5: Remove empty-list and NULL elements if requested
+  if (cleanEmpty) {
+    tempList <- Filter(function(x) {
+      !((is.list(x) && length(x) == 0) || is.null(x))
+    }, tempList)
   }
   
-  if (cleanEmpty){
-    cleanedListFinal <- Filter(function(x) {
-      # Keep the element if it's NOT (a list AND has length 0)
-      ! (is.list(x) && length(x) == 0)
-    }, cleanedList2)
-  } else {
-    cleanedListFinal <- copy(cleanedList2)
-  }
-  return(cleanedListFinal)
+  # Final: Deep copy before returning (protect modified list)
+  result <- copy(tempList)
+  return(result)
 }

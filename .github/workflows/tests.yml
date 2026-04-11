@@ -1,0 +1,203 @@
+name: Tests and Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Test mode (light skips heavy/long cases)"
+        required: false
+        default: light
+        type: choice
+        options: [light, heavy]
+
+env:
+  COVERAGE_MIN: 70
+  HEAVY_TESTS: test-generateDisturbances.R,test-generateDisturbancesShp.R,test-anthroDisturbance_Generator.R
+  NOT_CRAN: true
+  R_PROFILE_USER: /dev/null
+  R_PROFILE: /dev/null
+  R_ENVIRON_USER: /dev/null
+  R_ENVIRON: /dev/null
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgdal-dev libproj-dev gdal-bin libgeos-dev
+
+      - name: Set mode
+        run: |
+          MODE="${{ github.event.inputs.mode || 'light' }}"
+          [ -z "$MODE" ] && MODE="light"
+          echo "MODE=$MODE" >> "$GITHUB_ENV"
+
+      - name: Prepare R library path
+        run: |
+          echo "R_LIBS_USER=$RUNNER_TEMP/Rlibs" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/Rlibs"
+
+      - name: Setup R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - name: Pre-install Require (vanilla)
+        run: |
+          Rscript --vanilla - <<'RS'
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          if (!requireNamespace("Require", quietly = TRUE)) install.packages("Require")
+          if (!requireNamespace("Require", quietly = TRUE)) quit(status = 1)
+          RS
+
+      - name: Install light dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::covr
+            any::testthat
+            any::withr
+            any::terra
+            any::data.table
+            any::qs
+            any::sf
+            any::reproducible
+            any::raster
+            any::tictoc
+            any::mockery
+            any::digest
+            any::crayon
+            any::msm
+            any::doParallel
+            any::doSNOW
+            any::foreach
+            any::dplyr
+            any::sp
+            any::stringi
+            any::zip
+            any::Require
+            any::fasterize
+            any::truncnorm
+            any::xml2
+            any::DT
+            any::htmltools
+            any::htmlwidgets
+
+      - name: Print spatial diagnostics
+        run: |
+          gdal-config --version
+          gdal-config --datadir
+          projinfo EPSG:32633 | head
+          echo "PROJ_LIB=$PROJ_LIB"
+
+      - name: Ensure Require present
+        run: |
+          Rscript - <<'RS'
+          options(repos = c(CRAN = "https://cloud.r-project.org"))
+          if (!requireNamespace("Require", quietly = TRUE)) install.packages("Require")
+          if (!requireNamespace("Require", quietly = TRUE)) quit(status = 1)
+          RS
+
+      - name: Install heavy dependencies
+        if: ${{ env.MODE == 'heavy' }}
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::SpaDES.core
+            any::SpaDES.tools
+            any::spaths
+
+      - name: Run tests and coverage
+        env:
+          MODE: ${{ env.MODE }}
+        run: |
+          MODE=${MODE:-light}
+          mkdir -p artifacts/tests/"$MODE"
+          Rscript - <<'RS'
+          suppressPackageStartupMessages({
+            pkgs <- c(
+              "covr", "DT", "htmltools", "htmlwidgets", "testthat",
+              "terra", "data.table", "qs", "sf", "withr", "reproducible",
+              "raster", "tictoc", "mockery", "digest", "crayon", "msm",
+              "doParallel", "foreach", "dplyr", "sp", "stringi", "zip",
+              "Require"
+            )
+            invisible(lapply(pkgs, library, character.only = TRUE))
+            cat("terra version:", as.character(utils::packageVersion("terra")), "\n")
+            print(sf::sf_extSoftVersion())
+            cat("PROJ_LIB=", Sys.getenv("PROJ_LIB"), "\n")
+          })
+          mode <- Sys.getenv("MODE", "light")
+          coverage_min <- as.numeric(Sys.getenv("COVERAGE_MIN", "0"))
+          heavy_tests <- strsplit(Sys.getenv("HEAVY_TESTS", ""), ",", fixed = TRUE)[[1]]
+          heavy_tests <- trimws(heavy_tests[heavy_tests != ""])
+
+          report_dir <- normalizePath(file.path("artifacts", "tests", mode), mustWork = FALSE)
+          dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
+
+          test_dir <- file.path("tests", "testthat")
+          test_files <- list.files(test_dir, pattern = "^test-.*\\.R$", full.names = TRUE)
+          if (mode == "light" && length(heavy_tests)) {
+            test_files <- test_files[!basename(test_files) %in% heavy_tests]
+          }
+
+          Paths <<- list(inputPath = tempdir(), outputPath = tempdir())
+          r_scripts <- list.files("R", pattern = "\\.R$", full.names = TRUE)
+          invisible(lapply(r_scripts, source))
+          helper_files <- list.files(test_dir, pattern = "^helper-.*\\.R$", full.names = TRUE)
+          if (length(helper_files)) lapply(helper_files, source)
+
+          if (!length(test_files)) {
+            writeLines("No tests selected for this mode.", file.path(report_dir, "tests.log"))
+            quit(status = 0)
+          }
+
+          log_path <- file.path(report_dir, "tests.log")
+          junit_path <- file.path(report_dir, "tests.xml")
+          sink(log_path, split = TRUE)
+          on.exit({ while (sink.number() > 0) sink() }, add = TRUE)
+
+          if (!exists(".robustDigest", inherits = FALSE)) {
+            assign(".robustDigest", digest::digest, envir = .GlobalEnv)
+          }
+
+          reporter <- testthat::MultiReporter$new(list(
+            testthat::SummaryReporter$new(),
+            testthat::JunitReporter$new(file = junit_path)
+          ))
+          for (tf in test_files) {
+            testthat::test_file(
+              tf,
+              reporter = reporter,
+              stop_on_failure = TRUE,
+              stop_on_warning = FALSE
+            )
+          }
+
+          cov <- covr::file_coverage(r_scripts, test_files)
+          cov_pct <- covr::percent_coverage(cov)
+          covr::report(cov, file = file.path(report_dir, "coverage.html"), browse = FALSE)
+          writeLines(sprintf("coverage: %.2f%%", cov_pct), file.path(report_dir, "coverage.txt"))
+
+          if (cov_pct < coverage_min) {
+            stop(sprintf("Coverage %.2f%% below threshold %.2f%%", cov_pct, coverage_min))
+          }
+          RS
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-${{ env.MODE }}
+          path: artifacts/tests/${{ env.MODE }}
+          if-no-files-found: warn

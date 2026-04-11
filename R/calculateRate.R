@@ -5,8 +5,8 @@ calculateRate <- function(disturbanceParameters,
                           RTM,
                           diffYears = "2010_2015",
                           destinationPath,
-                          overwriteDisturbanceLayersNEW,
-                          overwriteDisturbanceLayersOLD,
+                          #overwriteDisturbanceLayersNEW, # currently not in use
+                          #overwriteDisturbanceLayersOLD,
                           studyArea,
                           DisturbanceRate,
                           totalDisturbanceRate,
@@ -19,10 +19,28 @@ calculateRate <- function(disturbanceParameters,
                           archiveOLD,
                           targetFileOLD,
                           urlOLD){
+  if (length(whichToUpdate) == 0) {
+    message("calculateRate: no rows need updating, returning original table.")
+    return(disturbanceParameters)
+  }
   
-  if (all(!is.null(DisturbanceRate), !is.null(totalDisturbanceRate)))
+  isEmptyInput <- function(x) {
+    if (is.null(x)) return(TRUE)
+    if (is.atomic(x) && length(x) == 0) return(TRUE)
+    if (is.list(x) && length(x) == 0) return(TRUE)
+    if (is.data.frame(x) && nrow(x) == 0) return(TRUE)
+    FALSE
+  }
+  hasDisturbanceRate <- !isEmptyInput(DisturbanceRate)
+  if (hasDisturbanceRate && !is.null(totalDisturbanceRate))
     stop("Both DisturbanceRate and totalDisturbanceRate were provided. Please provide only one,",
          "or none.")
+  if (isTRUE(getOption("anthroDisturbance.debugRate", FALSE))) {
+    message("[calculateRate] hasDisturbanceRate=", hasDisturbanceRate,
+            "; DisturbanceRate class=", paste(class(DisturbanceRate), collapse = ":"),
+            "; totalDisturbanceRate=", paste(totalDisturbanceRate, collapse = ","))
+  }
+  if (!hasDisturbanceRate) DisturbanceRate <- NULL
   
   # Subsetting parameters to update
   dP <- disturbanceParameters[whichToUpdate, ]
@@ -51,32 +69,43 @@ calculateRate <- function(disturbanceParameters,
                                  paste0("anthropogenicDisturbance_ECCC_", 
                                         diffYears,"_", digest(studyArea),".csv"))
     if (!file.exists(AD_changed_file)){
-      distECCC <- disturbanceInfoFromECCC(studyArea = studyArea, 
-                                          RTM = RTM,
-                                          disturbanceList = disturbanceList,
-                                          totalstudyAreaVAreaSqKm = totalstudyAreaVAreaSqKm,
-                                          classesAvailable = classesAvailable,
-                                          destinationPath = destinationPath,
-                                          bufferedDisturbances = disturbanceRateRelatesToBufferedArea,
-                                          maskOutLinesFromPolys = maskOutLinesFromPolys,
-                                          aggregateSameDisturbances = aggregateSameDisturbances,
-                                          archiveNEW = archiveNEW,
-                                          diffYears = diffYears,
-                                          targetFileNEW = targetFileNEW,
-                                          urlNEW = urlNEW,
-                                          archiveOLD = archiveOLD,
-                                          targetFileOLD = targetFileOLD,
-                                          urlOLD = urlOLD)
+      distECCC <- disturbanceInfoFromECCC(
+        studyArea                     = studyArea, 
+        RTM                           = RTM,
+        disturbanceList               = disturbanceList,
+        totalstudyAreaVAreaSqKm       = totalstudyAreaVAreaSqKm,
+        classesAvailable              = classesAvailable,
+        destinationPath               = destinationPath,
+        bufferedDisturbances          = disturbanceRateRelatesToBufferedArea,
+        maskOutLinesFromPolys         = maskOutLinesFromPolys,
+        aggregateSameDisturbances     = aggregateSameDisturbances,
+        #overwriteDisturbanceLayersNEW = overwriteDisturbanceLayersNEW,
+        #overwriteDisturbanceLayersOLD = overwriteDisturbanceLayersOLD,
+        archiveNEW                    = archiveNEW,
+        diffYears                     = diffYears,
+        targetFileNEW                 = targetFileNEW,
+        urlNEW                        = urlNEW,
+        archiveOLD                    = archiveOLD,
+        targetFileOLD                 = targetFileOLD,
+        urlOLD                        = urlOLD
+      )
       
       AD_changed <- distECCC[["AD_changed"]]
     } else {
       AD_changed <- data.table::fread(AD_changed_file)
     }
+    if (nrow(AD_changed[Class %in% toLookFor$classToSearch]) == 0) {
+      warning("No historical ECCC disturbance for these classes → setting rate to zero")
+      # set disturbanceRate = 0 for all rows we intended to update
+      disturbanceParameters[whichToUpdate, disturbanceRate := 0]
+      return(disturbanceParameters)
+    }
+    
     toFill <- AD_changed[Class %in% toLookFor[["classToSearch"]]]
     toUse <- merge(toFill, toLookFor[, c("classToSearch", "dataClass")], all.x = TRUE, 
                    by.x = "Class", by.y = "classToSearch")
     toUse <- data.table::dcast(toUse, dataClass ~ ., fun.agg = sum, 
-                             value.var = c("yearOLD", "yearNEW"))
+                               value.var = c("yearOLD", "yearNEW"))
     # Need to recalculate proportions, though!
     toUse[, disturbProportionInAreaOLD := yearOLD/totalstudyAreaVAreaSqKm]
     toUse[, disturbProportionInAreaNEW := yearNEW/totalstudyAreaVAreaSqKm]
@@ -99,55 +128,25 @@ calculateRate <- function(disturbanceParameters,
       # size. In this case, we will use defaults for what we know: 
       message(paste0("Calculating rate for ", sub[["disturbanceType"]], 
                      " of ", sub[["dataClass"]]))
-      if (any(is.null(lay),
-              length(lay) == 0)){
-        #TODO Curently, if a disturbance is not currently present in the study area, it won't
-        # be simulated. We can improve this by checking the potential within the study area
-        # and coming up with a solution.
-        # if (sub[["dataClass"]] == "potentialWindTurbines"){
-        #   
-        #   # Only one wind turbines exists in NWT, there isn't a layer pinpointing where. 
-        #   # Therefore, we researched what would this mean in the NWT (NT1_BCR6: 572448 km2):
-        #   
-        #   # 1 Turbine = 0.0625 km2
-        #   # 0.1 Turbine = 0.00625 km2 
-        #   # areaSqKmChangedPerYear <- 0.00625
-        #   
-        #   # windTurbines: 6070m2 per 2-megawatt of energy. In the NWT the only big turbine is in a
-        #   #               Diamond exploration, with 9.2MW being generated (27,900 m2). Each pixel is
-        #   #               62,500m2 (or 0.0625 km2), so we will have in average, one big turbine in 2.3 pixels.
-        #   #               There is one turbine being constructed and should be done in 2023 (2021 to be 
-        #   #               easier on the simulations) -- Size: 3.5-megawatt = less than a pixel
-        #   #               There are current no plans for more turbines. Still, we might be able to add
-        #   #               one medium turbine every 10 years. That would mean 1 pixel every 10 years 
-        #   #               (or 0.1 pixel every year) over 572448 km2. Each pixel is 0.0625 km2, so  
-        #   #               we have (0.1*0.0625)/572448 = 1.0919e-08 km2 change per km2 of area over 1 year. 
-        #   #               If we multiply this by the study area, we end up with the total area change 
-        #   #               for this area per year. But what we need in the table is the % change per 
-        #   #               year over the area. So we need to divide the resulting value by the area 
-        #   #               and then multiply by 100 to get the % change in relation to the area.
-        #                  
-        #   areaChangePerYearInKm2PerKm2 <- 1.0919e-08 # Which is the same as the proportion of any area
-        #   
-        #   message(crayon::yellow(paste0("There is no information on rate for ", sub[["dataClass"]],
-        #                                 ". However, this is a potentialWindTurbines. The module will ",
-        #                                 "return a rate of one turbine per 10 years, or 0.1 turbines ",
-        #                                 "per year over the NT1_BCR6 area (572448 km2). The 0.1",
-        #                                 "pixels (or 0.625 km2) correspond to ", 
-        #                                 format(areaChangePerYearInKm2PerKm2*100, 
-        #                                        scientific = TRUE), 
-        #                                 "% of the current study area, being this the value replacing NA. ",
-        #                                 "If this is wrong, please provide both disturbanceRate and ",
-        #                                 "disturbanceSize in the disturbanceParameters table or in ",
-        #                                 " the DisturbanceRate")))
-        #   sub[, disturbanceRate := areaChangePerYearInKm2PerKm2*100] #areaSqKmChangedPerYear/totalAreaSqKm
-        # } else {
+      if (any(is.null(lay), length(lay) == 0)){
+        # If no current origin layer exists in the AOI, but the user supplied
+        # DisturbanceRate, proceed using that rate (generation will rely on potential).
+        if (!is.null(DisturbanceRate)) {
+          message(crayon::yellow(paste0(
+            "No current '", sub[["disturbanceOrigin"]], "' layer in AOI; proceeding with supplied DisturbanceRate for ",
+            sub[["dataClass"]], ".")))
+          updatedVal <- DisturbanceRate[dataName == sub[["dataName"]] & 
+                                          dataClass == sub[["dataClass"]] & 
+                                          disturbanceType == sub[["disturbanceType"]] & 
+                                          disturbanceOrigin == sub[["disturbanceOrigin"]], "disturbanceRate"]
+          sub[, disturbanceRate := updatedVal]
+        } else {
           message(crayon::red(paste0("There is no potential for ", sub[["dataClass"]],
                                      " in the study Area. The module will return NULL and this",
                                      "class will not be simulated. ",
                                      "If this is wrong, please provide a layer with this information ")))
           sub <- NULL
-        # }
+        }
       } else {
         if (is.null(DisturbanceRate)) {
           if (!is.null(totalDisturbanceRate)){            
@@ -158,8 +157,30 @@ calculateRate <- function(disturbanceParameters,
             prop_file <- file.path(destinationPath, 
                                    paste0("proportionTable_ECCC_", diffYears, "_", 
                                           digest(studyArea),".csv"))
-            if (!file.exists(prop_file)){
-              proportionTable <- distECCC[["proportionTable"]] 
+            if (!file.exists(prop_file)) {
+              if (!exists("distECCC")) {
+                distECCC <- disturbanceInfoFromECCC(
+                  studyArea                     = studyArea, 
+                  RTM                           = RTM,
+                  disturbanceList               = disturbanceList,
+                  totalstudyAreaVAreaSqKm       = totalstudyAreaVAreaSqKm,
+                  classesAvailable              = classesAvailable,
+                  destinationPath               = destinationPath,
+                  bufferedDisturbances          = disturbanceRateRelatesToBufferedArea,
+                  maskOutLinesFromPolys         = maskOutLinesFromPolys,
+                  aggregateSameDisturbances     = aggregateSameDisturbances,
+                  #overwriteDisturbanceLayersNEW = overwriteDisturbanceLayersNEW,
+                  #overwriteDisturbanceLayersOLD = overwriteDisturbanceLayersOLD,
+                  archiveNEW                    = archiveNEW,
+                  diffYears                     = diffYears,
+                  targetFileNEW                 = targetFileNEW,
+                  urlNEW                        = urlNEW,
+                  archiveOLD                    = archiveOLD,
+                  targetFileOLD                 = targetFileOLD,
+                  urlOLD                        = urlOLD
+                )
+              }
+              proportionTable <- distECCC[["proportionTable"]]
             } else {
               proportionTable <- data.table::fread(prop_file)
             }
@@ -167,12 +188,13 @@ calculateRate <- function(disturbanceParameters,
             neededDistRates <- sub[["disturbanceOrigin"]]
             # 2. Match which of these have a value in proportionTable
             subProportionTable <- proportionTable[dataClass %in% neededDistRates,]
-            # 2b. If the disturbance exists but was negative, we remove it from the list. 
-            if (nrow(subProportionTable)==0){
+            # 2b. If the disturbance exists but was negative/absent, keep the row with zero rate.
+            if (nrow(subProportionTable) == 0) {
               message(paste0("The disturbance ", sub[["dataName"]], " of the sector ",
                              sub[["disturbanceOrigin"]], " was virtually zero or negative in the area.",
-                             " Removing it from simulations."))
-              return(NULL)
+                             " Setting rate to 0 and keeping row for scheduling/diagnostics."))
+              sub[, disturbanceRate := 0]
+              return(sub)
             }
             # 3. Calculate the percentage of the provided totalDisturbanceRate that belongs to each
             # class
@@ -185,25 +207,49 @@ calculateRate <- function(disturbanceParameters,
             # 5. Modify the table, which should be an Input.
             # This process ensures we are not double counting disturbances, and that we can calculate the change 
             # in disturbance per class, which we need to simulate the new disturbances coming.
-            toUseSub <- toUse[dataClass %in% sub[["disturbanceOrigin"]], ]
-            if (NROW(toUseSub) > 1) {
-              warning("Repeated data found in the process. Please debug", immediate. = TRUE)
-              browser()
+            toUseSub <- toUse[dataClass %in% sub[["disturbanceOrigin"]]]
+            if (NROW(toUseSub) == 0L) {
+              warning("No ECCC-derived rate for ", sub$dataName, "/", sub$dataClass, 
+                      "; setting rate to zero", immediate. = TRUE)
+              sub[, disturbanceRate := 0]
+            } else {
+              if (NROW(toUseSub) > 1L) {
+                warning("Repeated ECCC rows for ", sub$dataName, "/", sub$dataClass, "; using first")
+                toUseSub <- toUseSub[1]
+              }
+              # Pull the single value, sanitize it
+              val <- toUseSub[["proportionAreaSqKmChangedPerYear"]]
+              if (length(val) == 0L || is.na(val)) val <- 0
+              # Already clipped negatives to 0 earlier, but be defensive:
+              val <- max(0, val)
+              sub[, disturbanceRate := 100 * val]
+              
+              message(paste0("Using yearly disturbance rate for ", sub[["dataName"]],
+                             " as ", round(sub[["disturbanceRate"]], 6),
+                             "% of the total area."))
             }
-            # Here the disturbance rate is in proportion. Needs to be multiplied for %!
-            sub[, disturbanceRate := 100*toUseSub[["proportionAreaSqKmChangedPerYear"]]]
-            
-            message(paste0("Using yearly disturbance rate for ", sub[["dataName"]],
-                           " as ", round(sub[["disturbanceRate"]], 6), 
-                           "% of the total area."))
           }
         } else {
           # One can also pass the parameter totalDisturbanceRate. If so, we use the ECCC data to calculate
           # the % each disturbance needs to be to achieve (more or less) the total expected disturbance 
-          updatedVal <- DisturbanceRate[dataName == sub[["dataName"]] & 
-                                          dataClass == sub[["dataClass"]] & 
-                                          disturbanceType == sub[["disturbanceType"]] & 
-                                          disturbanceOrigin == sub[["disturbanceOrigin"]], "disturbanceRate"]
+          subDR <- DisturbanceRate[
+            dataName == sub$dataName &
+              dataClass == sub$dataClass &
+              disturbanceType == sub$disturbanceType &
+              disturbanceOrigin == sub$disturbanceOrigin
+          ]
+          if (nrow(subDR) == 0) {
+            warning("No matching row in DisturbanceRate for ",
+                    sub$dataName, "/", sub$dataClass, "; setting rate to zero",
+                    immediate. = TRUE)
+            sub[, disturbanceRate := 0]
+            return(sub)
+          }
+          if (nrow(subDR) > 1) {
+            warning("Multiple matches in DisturbanceRate for ", 
+                    sub$dataName, "/", sub$dataClass, "; using first")
+          }
+          updatedVal <- subDR[1, disturbanceRate]
           sub[, disturbanceRate := updatedVal]
           # Here the disturbance rate is already in percent!
           message(paste0("Using yearly disturbance rate for ", sub[["dataName"]],

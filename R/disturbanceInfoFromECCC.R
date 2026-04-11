@@ -32,9 +32,14 @@ disturbanceInfoFromECCC <- function(studyArea,
   
   # Calculate the difference in time between both layers 
   parts <- strsplit(diffYears, "_")[[1]]
-  num1 <- suppressWarnings(as.numeric(parts[1]))
-  num2 <- suppressWarnings(as.numeric(parts[2]))
-  yearDistance <- num2 - num1
+  if (length(parts) < 2) {
+    num1 <- NA_real_
+    num2 <- NA_real_
+  } else {
+    num1 <- suppressWarnings(as.numeric(parts[1]))
+    num2 <- suppressWarnings(as.numeric(parts[2]))
+  }
+  yearDistance <- if (is.na(num1) || is.na(num2)) NA_real_ else num2 - num1
   
   # Original ECCC file:
   # urlNEW <- paste0("https://data-donnees.ec.gc.ca/data/species/developplans/NEW-",
@@ -101,15 +106,83 @@ disturbanceInfoFromECCC <- function(studyArea,
   if (bufferedDisturbances)
     AD_OLD_Polys <- terra::buffer(x = AD_OLD_Polys, width = bufferSize)
   
-  if (maskOutLinesFromPolys){
+  if (maskOutLinesFromPolys) {
     # Exclude buffered polygons from lines to not double count them
     AD_NEW_Lines <- terra::mask(AD_NEW_Lines, mask = AD_NEW_Polys, inverse = TRUE)
     AD_OLD_Lines <- terra::mask(AD_OLD_Lines, mask = AD_OLD_Polys, inverse = TRUE)
   }
   
-  # Bind both data so I can extract the area 
-  AD_NEW_all <- rbind(AD_NEW_Lines, AD_NEW_Polys)
-  AD_OLD_all <- rbind(AD_OLD_Lines, AD_OLD_Polys)
+  # Bind both data so I can extract the area
+  clean_geoms <- function(sv, class_name) {
+    if (length(sv) == 0) {
+      warning(paste("All features in class", class_name, "are empty after processing."))
+      return(sv)
+    }
+    # Remove empty geometries
+    sv <- sv[!terra::is.empty(sv)]
+    if (length(sv) == 0) {
+      warning(paste("All features in class", class_name, "are empty after removing empty geometries."))
+      return(sv)
+    }
+    # Make valid
+    sv <- tryCatch(terra::makeValid(sv), error = function(e) sv)
+    # Remove empty again after making valid
+    sv <- sv[!terra::is.empty(sv)]
+    if (length(sv) == 0) {
+      warning(paste("All features in class", class_name, "are empty after making valid and removing empty geometries."))
+    }
+    return(sv)
+  }
+  
+  AD_NEW_Lines <- clean_geoms(AD_NEW_Lines, "AD_NEW_Lines")
+  AD_NEW_Polys <- clean_geoms(AD_NEW_Polys, "AD_NEW_Polys")
+  AD_OLD_Lines <- clean_geoms(AD_OLD_Lines, "AD_OLD_Lines")
+  AD_OLD_Polys <- clean_geoms(AD_OLD_Polys, "AD_OLD_Polys")
+  
+  # Combine geometries
+  combine_geometries <- function(line_sv, poly_sv) {
+    if (length(line_sv) == 0 && length(poly_sv) == 0) {
+      warning("Both line and polygon inputs are empty.")
+      return(NULL)
+    }
+    
+    # If one is empty, return the other
+    if (length(line_sv) == 0) return(poly_sv)
+    if (length(poly_sv) == 0) return(line_sv)
+    
+    # Both should be polygons after buffering - convert explicitly
+    line_sv <- terra::as.polygons(line_sv)
+    poly_sv <- terra::as.polygons(poly_sv)
+    
+    # Combine using terra's vect list constructor
+    combined <- terra::vect(list(line_sv, poly_sv))
+    return(combined)
+  }
+  
+  AD_NEW_all <- combine_geometries(AD_NEW_Lines, AD_NEW_Polys)
+  AD_OLD_all <- combine_geometries(AD_OLD_Lines, AD_OLD_Polys)
+  
+  # Handle cases where combine_geometries returns NULL
+  if (is.null(AD_NEW_all)) {
+    warning("Combined geometries for AD_NEW are NULL. Initializing an empty vector.")
+    AD_NEW_all <- terra::vect()
+  }
+  if (is.null(AD_OLD_all)) {
+    warning("Combined geometries for AD_OLD are NULL. Initializing an empty vector.")
+    AD_OLD_all <- terra::vect()
+  }
+  
+  # Safe area calculation
+  safe_expanse <- function(x) {
+    if (length(x) == 0) return(0)
+    tryCatch(
+      terra::expanse(x, transform = FALSE, unit = "km"),
+      error = function(e) 0
+    )
+  }
+  
+  AD_NEW_all$Area_sqKm <- safe_expanse(AD_NEW_all)
+  AD_OLD_all$Area_sqKm <- safe_expanse(AD_OLD_all)
   
   # Class conversion needs to happen before aggregation
   # Cleanup the data. Some classes are not in both datasets.
@@ -135,13 +208,17 @@ disturbanceInfoFromECCC <- function(studyArea,
   # We assume they are newer rather than older.
   allClassesAvailable <- unique(AD_NEW_all$Class)
   nonPotLay <- extractNonPotentialLayers(disturbanceList)
-  laysToADD <- lapply(1:nrow(nonPotLay), function(INDEX){
-    layIndex <- disturbanceList[[nonPotLay[INDEX, Sector]]][[nonPotLay[INDEX, dataClass]]]
-    if (geomtype(layIndex) != geomtype(AD_NEW_all)){
-      layIndex <- terra::buffer(x = layIndex, width = bufferSize)
+  laysToADD <- lapply(seq_len(nrow(nonPotLay)), function(INDEX) {
+    sector <- nonPotLay[INDEX, Sector]
+    dataClass <- nonPotLay[INDEX, dataClass]
+    layIndex <- disturbanceList[[sector]][[dataClass]]
+    if (length(layIndex) > 0) {
+      if (geomtype(layIndex) != "polygons") {
+        layIndex <- terra::buffer(layIndex, width = bufferSize)
+      }
     }
     return(layIndex)
-    })
+  })
   laysToADD <- do.call(rbind, laysToADD)
   AD_NEW_all <- rbind(AD_NEW_all, laysToADD)
   
@@ -153,7 +230,7 @@ disturbanceInfoFromECCC <- function(studyArea,
   AD_NEW_all$Area_sqKm <- terra::expanse(AD_NEW_all, transform = FALSE, unit = "km")
   AD_OLD_all$Area_sqKm <- terra::expanse(AD_OLD_all, transform = FALSE, unit = "km")
 
-    # 3.2. Bring all to a data.table and summarize
+  # 3.2. Bring all to a data.table and summarize
   AD_NEW_DT <- as.data.table(as.data.frame(AD_NEW_all[, c("Class", "Area_sqKm")]))
   AD_OLD_DT <- as.data.table(as.data.frame(AD_OLD_all[, c("Class", "Area_sqKm")]))
   
@@ -177,19 +254,22 @@ disturbanceInfoFromECCC <- function(studyArea,
     }
   }
 
-  AD_NEW_DT_summ <- AD_NEW_DT[, totalArea_sqKm := sum(Area_sqKm), by = "Class"]
-  AD_NEW_DT_summ <- unique(AD_NEW_DT_summ[, Area_sqKm := NULL]) # For when aggregateSameDisturbances = FALSE
-  AD_OLD_DT_summ <- AD_OLD_DT[, totalArea_sqKm := sum(Area_sqKm), by = "Class"]
-  AD_OLD_DT_summ <- unique(AD_OLD_DT_summ[, Area_sqKm := NULL]) # For when aggregateSameDisturbances = FALSE
+  AD_NEW_DT <- as.data.table(as.data.frame(AD_NEW_all[, c("Class","Area_sqKm")] ))
+  AD_OLD_DT <- as.data.table(as.data.frame(AD_OLD_all[, c("Class","Area_sqKm")] ))
+  AD_NEW_DT_summ <- AD_NEW_DT[, totalArea_sqKm:=sum(Area_sqKm), by="Class"]
+  AD_NEW_DT_summ <- unique(AD_NEW_DT_summ[, Area_sqKm:=NULL])
+  AD_OLD_DT_summ <- AD_OLD_DT[, totalArea_sqKm:=sum(Area_sqKm), by="Class"]
+  AD_OLD_DT_summ <- unique(AD_OLD_DT_summ[, Area_sqKm:=NULL])
   
   # 3.3. Now I can see how much the disturbances changed from OLD to NEW in sq Km
   AD_NEW_DT_summ[, Year := "yearNEW"]
   AD_OLD_DT_summ[, Year := "yearOLD"]
   
-  AD_change <- rbind(AD_NEW_DT_summ, AD_OLD_DT_summ)
+  AD_change <- data.table::rbindlist(list(AD_NEW_DT_summ, AD_OLD_DT_summ))
   
   AD_changed <- dcast(data = AD_change, formula = Class ~ Year, value.var = "totalArea_sqKm")
   AD_changed[is.na(yearOLD), yearOLD := 0]
+  AD_changed[is.na(yearNEW), yearNEW := 0] 
   
   AD_changed[, disturbProportionInAreaOLD := yearOLD/totalstudyAreaVAreaSqKm]
   AD_changed[, disturbProportionInAreaNEW := yearNEW/totalstudyAreaVAreaSqKm]
@@ -200,8 +280,18 @@ disturbanceInfoFromECCC <- function(studyArea,
   AD_changed[, totalPercentAreaDisturbedOLD := totalProportionAreaDisturbedOLD*100]
   AD_changed[, totalPercentAreaDisturbedNEW := totalProportionAreaDisturbedNEW*100]
 
-  AD_changed[, relativeChangePerClassPerYear := ((yearNEW-yearOLD)/yearOLD)/yearDistance]
-  AD_changed[, relativeChangePerClassPerYearPerc := relativeChangePerClassPerYear*100]
+  if (!is.na(yearDistance) && yearDistance != 0) {
+    AD_changed[, relativeChangePerClassPerYear := ((yearNEW-yearOLD)/yearOLD)/yearDistance]
+    AD_changed[, relativeChangePerClassPerYearPerc := relativeChangePerClassPerYear*100]
+  } else {
+    if (is.na(yearDistance)) {
+      warning(paste("The 'diffYears' parameter (", diffYears, ") contains non-numeric parts. Relative change could not be calculated.", sep = ""))
+    } else {
+      warning(paste("The 'diffYears' parameter (", diffYears, ") specifies the same year. Relative change could not be calculated.", sep = ""))
+    }
+    AD_changed[, relativeChangePerClassPerYear := NA_real_]
+    AD_changed[, relativeChangePerClassPerYearPerc := NA_real_]
+  }
 
   # [ NOTE: Using percent is not a good practice because the really high percentages have a really small total area.
   # And the largest change (seismic lines in smaller study area, reduction has a HUGE area but comparatively really small %)
@@ -226,9 +316,16 @@ disturbanceInfoFromECCC <- function(studyArea,
     toUse[, proportionAreaSqKmChangedPerYear := (disturbProportionInAreaNEW-disturbProportionInAreaOLD)/yearDistance]
     toUse <- toUse[, c("dataClass", "proportionAreaSqKmChangedPerYear")]
     
-    proportionTable <- dcast(toUse, dataClass ~ ., fun.agg = sum, 
-                     value.var = "proportionAreaSqKmChangedPerYear")
-    names(proportionTable) <- c("dataClass", "proportionAreaSqKmChangedPerYear")
+    if (nrow(toUse) > 0) {
+      proportionTable <- dcast(toUse, dataClass ~ ., fun.agg = sum, 
+                               value.var = "proportionAreaSqKmChangedPerYear")
+      setnames(proportionTable, c("dataClass", "proportionAreaSqKmChangedPerYear"))
+    } else {
+      proportionTable <- data.table(
+        dataClass = character(),
+        proportionAreaSqKmChangedPerYear = numeric()
+      )
+    }
     
     # If we have anything reducing from one year to the next, at this time we will remove from here
     proportionTable[["proportionAreaSqKmChangedPerYear"]][is.na(proportionTable[["proportionAreaSqKmChangedPerYear"]])] <- 0
@@ -247,8 +344,18 @@ disturbanceInfoFromECCC <- function(studyArea,
       browser()
     })
     # ttDistubanceRate: total disturbance proportion across the studyArea per year
-    ttDistubanceRate <- sum(proportionTable[["proportionAreaSqKmChangedPerYear"]])
-    proportionTable[, proportionOfTotalDisturbance := proportionAreaSqKmChangedPerYear/ttDistubanceRate]
+    ttDisturbanceRate <- sum(proportionTable[["proportionAreaSqKmChangedPerYear"]])
+    proportionTable[, proportionOfTotalDisturbance := 0][]
+    
+    if (ttDisturbanceRate != 0) {
+      if (ttDisturbanceRate < 0) {
+        warning("Total disturbance rate is negative. Setting proportions to zero.")
+        proportionTable[, proportionOfTotalDisturbance := 0]
+      } else {
+        proportionTable[, proportionOfTotalDisturbance :=
+                          proportionAreaSqKmChangedPerYear / ttDisturbanceRate]
+      }
+    }
     write.csv(x = AD_changed, file.path(destinationPath, 
                                         paste0("anthropogenicDisturbance_ECCC_", diffYears,"_", digest(studyArea),".csv")))
     write.csv(x = proportionTable, file.path(destinationPath, 
@@ -256,4 +363,3 @@ disturbanceInfoFromECCC <- function(studyArea,
     return(list(AD_changed = AD_changed,
                 proportionTable = proportionTable))
 }
-

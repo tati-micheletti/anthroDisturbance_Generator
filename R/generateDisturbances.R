@@ -11,19 +11,112 @@ generateDisturbances <- function(disturbanceParameters,
                                  connectingBlockSize,
                                  disturbanceRateRelatesToBufferedArea,
                                  outputsFolder,
-                                 runName){
+                                 runName,
+                                 checkDisturbancesForBuffer = FALSE){
 
   # Extracting layers from previous ones
   # Total study area
   rasterToMatchR <- raster::raster(rasterToMatch)
+  growthStepEnlargingLines <- if (is.null(growthStepEnlargingLines) || is.na(growthStepEnlargingLines)) 1 else growthStepEnlargingLines
+
+  safeMergeSpatVectors <- function(items,
+                                   context = "spatial vectors",
+                                   bufferWidth = NULL,
+                                   targetCRS = NULL) {
+    if (is.null(items)) return(NULL)
+    if (!is.list(items)) items <- list(items)
+    items <- Filter(function(x) {
+      inherits(x, "SpatVector") &&
+        tryCatch(nrow(x) > 0L, error = function(...) FALSE)
+    }, items)
+    if (!length(items)) {
+      if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+        message("[generateDisturbances] no ", context, " to merge; returning NULL")
+      }
+      return(NULL)
+    }
+    baseWidth <- bufferWidth
+    if (is.null(baseWidth) || is.na(baseWidth) || baseWidth <= 0) {
+      baseWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+    }
+    if (is.na(baseWidth) || baseWidth <= 0) baseWidth <- 15
+    convertToPolygon <- function(vec) {
+      if (is.null(vec) || !inherits(vec, "SpatVector")) return(vec)
+      geomType <- tryCatch(terra::geomtype(vec), error = function(...) NA_character_)
+      if (all(!is.na(geomType) & geomType == "polygons")) return(vec)
+      width <- baseWidth
+      if (any(geomType == "points", na.rm = TRUE)) {
+        width <- width/2
+      }
+      if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+        message("[generateDisturbances] buffering vector (geom=", paste(geomType, collapse = "/"),
+                ") by ", signif(width, 4), " prior to merge in ", context)
+      }
+      vec <- terra::buffer(vec, width = width)
+      terra::aggregate(vec, dissolve = TRUE)
+    }
+    items <- lapply(items, function(obj) {
+      geomType <- tryCatch(terra::geomtype(obj), error = function(...) NA_character_)
+      if (all(!is.na(geomType) & geomType == "polygons")) return(obj)
+      convertToPolygon(obj)
+    })
+    if (length(items) == 1L) {
+      merged <- items[[1]]
+    } else {
+      merged <- Reduce(function(acc, x) {
+      if (is.null(acc) || !inherits(acc, "SpatVector") ||
+          tryCatch(nrow(acc) == 0L, error = function(...) TRUE)) {
+        return(x)
+      }
+      if (is.null(x) || !inherits(x, "SpatVector") ||
+          tryCatch(nrow(x) == 0L, error = function(...) TRUE)) {
+        return(acc)
+      }
+      acc <- convertToPolygon(acc)
+      x <- convertToPolygon(x)
+      tryCatch(
+        do.call(rbind, list(acc, x)),
+        error = function(err) {
+          geomAcc <- tryCatch(terra::geomtype(acc), error = function(...) NA_character_)
+          geomX <- tryCatch(terra::geomtype(x), error = function(...) NA_character_)
+          warning(paste0("[generateDisturbances] failed to merge vectors (geom acc=",
+                         paste(geomAcc, collapse = "/"), ", geom x=",
+                         paste(geomX, collapse = "/"), ") for ", context,
+                         ": ", conditionMessage(err), ". Returning accumulator."),
+                  call. = FALSE, immediate. = TRUE)
+          acc
+        }
+      )
+    }, items[-1], init = items[[1]])
+    }
+  if (!is.null(targetCRS) && inherits(merged, "SpatVector")) {
+    merged <- tryCatch(terra::project(merged, targetCRS), error = function(e) merged)
+  }
+  merged
+}
+  expanse_vec <- function(x, unit = "m", transform = FALSE) {
+    vals <- tryCatch(terra::expanse(x, unit = unit, transform = transform),
+                     error = function(...) NA_real_)
+    if (is.data.frame(vals)) {
+      vals <- if ("area" %in% names(vals)) vals[["area"]] else unlist(vals, use.names = FALSE)
+    } else if (is.list(vals)) {
+      vals <- unlist(vals, use.names = FALSE)
+    }
+    suppressWarnings(as.numeric(vals))
+  }
+  sumExpanse <- function(x, unit = "m", transform = FALSE) {
+    vals <- expanse_vec(x, unit = unit, transform = transform)
+    if (!length(vals)) return(0)
+    sum(vals, na.rm = TRUE)
+  }
   
   if (!is(studyArea, "SpatVector"))
     studyArea <- terra::vect(studyArea)
     
   studyArea <- terra::project(x = studyArea, y = terra::crs(rasterToMatch))
   uniStudyArea <- terra::aggregate(studyArea)
-  totalstudyAreaVAreaSqKm <- terra::expanse(uniStudyArea, unit = "km", transform = FALSE)
-  totalstudyAreaVAreaSqm <- terra::expanse(uniStudyArea, unit = "m", transform = FALSE)
+  totalstudyAreaVAreaSqKm <- sumExpanse(uniStudyArea, unit = "km", transform = FALSE)
+  totalstudyAreaVAreaSqm <- sumExpanse(uniStudyArea, unit = "m", transform = FALSE)
   totNPix <- sum(rasterToMatch[], na.rm = TRUE)
   calculatedPixelSizem2 <- totalstudyAreaVAreaSqm/totNPix # in m2
   
@@ -47,14 +140,42 @@ generateDisturbances <- function(disturbanceParameters,
     # NOTE: We devide the res by 2 so the total around is exactly the resolution of a pixel,
     # as the buffer uses the width on all sides.
 
-    linesLays <- unlist(lapply(linesLays, function(X){
-      terra::buffer(x = X, width = res(rasterToMatch)[1]/2)
-      # Here we need to buffer as this layer will be used to avoid specific pixels (i.e., already 
-      # disturbed!) to be selected for new disturbances.
-    }))
-    linesAndPolys <- do.call(what = c, list(polyLays, linesLays))
-    names(linesAndPolys) <- NULL
-    allLays <- do.call(rbind, linesAndPolys)
+    if (length(linesLays)) {
+      linesLays <- lapply(linesLays, function(X){
+        terra::buffer(x = X, width = res(rasterToMatch)[1]/2)
+        # Here we need to buffer as this layer will be used to avoid specific pixels (i.e., already 
+        # disturbed!) to be selected for new disturbances.
+      })
+    }
+    if (length(linesLays)) {
+      linesLays <- Filter(function(x) {
+        inherits(x, "SpatVector") &&
+          tryCatch(nrow(x) > 0L, error = function(...) FALSE)
+      }, linesLays)
+    }
+    if (length(polyLays)) {
+      polyLays <- Filter(function(x) {
+        inherits(x, "SpatVector") &&
+          tryCatch(nrow(x) > 0L, error = function(...) FALSE)
+      }, polyLays)
+    }
+    linesAndPolys <- c(polyLays, linesLays)
+    if (!length(linesAndPolys)) {
+      message("No current disturbances found in study area; skipping generation for this year.")
+      return(currentDisturbanceLayer)
+    }
+    if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+      message("[generateDisturbances] merging linesAndPolys length=", length(linesAndPolys))
+      message("[generateDisturbances] linesAndPolys classes=", paste(vapply(linesAndPolys, function(x) {
+        if (is.null(x)) return("NULL")
+        paste(class(x), collapse = ":")
+      }, character(1)), collapse=" | "))
+    }
+    mergeWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+    allLays <- safeMergeSpatVectors(linesAndPolys,
+                                    context = "current disturbance layers",
+                                    bufferWidth = mergeWidth,
+                                    targetCRS = terra::crs(rasterToMatchR))
   } else {
     if (is(currentDisturbanceLayer, "RasterLayer"))
       allLaysRas <- terra::rast(currentDisturbanceLayer) else
@@ -78,21 +199,67 @@ generateDisturbances <- function(disturbanceParameters,
               return(buffVect)
             })
             names(curDistVcsAll) <- NULL
-            allLays <- do.call(rbind, curDistVcsAll)
+            curDistVcsAll <- Filter(Negate(is.null), curDistVcsAll)
+            mergeWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+            allLays <- safeMergeSpatVectors(curDistVcsAll,
+                                            context = "existing disturbance vectors",
+                                            bufferWidth = mergeWidth,
+                                            targetCRS = terra::crs(rasterToMatchR))
           }
     # Create allLaysRas, which is the disturbance raster with all disturbances rasterized, with
     # value == 1 for the disturbed pixels. Non-disturbed pixels are NA
   }
   # Now fasterize all polys
-  allLaysSF <- sf::st_as_sf(x = allLays)
-  allLaysSF$Polys <- 1
-  polysField <- "Polys"
-  message("Fasterizing disturbances...")
-  rasterToMatchR <- rasterToMatchR
-  allLaysRas <- fasterize::fasterize(sf = st_collection_extract(allLaysSF, "POLYGON"),
-                                     raster = rasterToMatchR, 
-                                     field = polysField)
-  allLaysRas <- rast(allLaysRas)
+  allLaysRas <- NULL
+  if (!is.null(allLays) && inherits(allLays, "SpatVector") &&
+      tryCatch(nrow(allLays) > 0L, error = function(...) FALSE)) {
+    allLaysSF <- sf::st_as_sf(x = allLays)
+    if (nrow(allLaysSF) > 0L) {
+      geomTypes <- sf::st_geometry_type(allLaysSF, by_geometry = TRUE)
+      polyIdx <- geomTypes %in% c("POLYGON", "MULTIPOLYGON")
+      if (!any(polyIdx, na.rm = TRUE)) {
+        if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+          message("[generateDisturbances] no polygon geometries available for fasterize; skipping raster conversion")
+        }
+      } else {
+        polySF <- allLaysSF[polyIdx, , drop = FALSE]
+        if (nrow(polySF) > 0L) {
+          emptyIdx <- sf::st_is_empty(polySF)
+          if (any(emptyIdx, na.rm = TRUE)) {
+            if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+              message("[generateDisturbances] dropping ", sum(emptyIdx, na.rm = TRUE),
+                      " empty geometries before fasterize")
+            }
+            polySF <- polySF[!emptyIdx, , drop = FALSE]
+          }
+        }
+        if (nrow(polySF) > 0L) {
+          validIdx <- sf::st_is_valid(polySF)
+          if (any(!validIdx, na.rm = TRUE)) {
+            if (requireNamespace("lwgeom", quietly = TRUE)) {
+              polySF <- lwgeom::st_make_valid(polySF)
+            } else {
+              warnMsg <- "[generateDisturbances] invalid geometries detected but 'lwgeom' not available; dropping invalid features before fasterize."
+              warning(warnMsg, call. = FALSE, immediate. = TRUE)
+              polySF <- polySF[validIdx, , drop = FALSE]
+            }
+          }
+        }
+        if (nrow(polySF) > 0L) {
+          polySF$Polys <- 1
+          polysField <- "Polys"
+          message("Rasterizing disturbances...")
+          rasterToMatchR <- rasterToMatchR
+          polyVec <- terra::vect(polySF)
+          allLaysRas <- terra::rasterize(polyVec,
+                                         terra::rast(rasterToMatchR), 
+                                         field = polysField,
+                                         background = NA_real_,
+                                         touches = TRUE)
+        }
+      }
+    }
+  }
   
 
   # FIRST: Enlarging
@@ -101,11 +268,19 @@ generateDisturbances <- function(disturbanceParameters,
   dPar <- disturbanceParameters[disturbanceType  %in% "Enlarging", ]
   whichSector <- dPar[["dataName"]]
   Enlarged <- lapply(whichSector, function(Sector) {
-    whichOrigin <- dPar[dataName == Sector, disturbanceOrigin]
-    if (length(whichOrigin) != 1) {
-      print("Repeated origins and sector. Debug")
-      browser()
-    } # Bug Catch
+    whichOriginRaw <- dPar[dataName == Sector, disturbanceOrigin]
+    whichOrigin <- unique(whichOriginRaw)
+    if (!length(whichOrigin)) {
+      warning("[generateDisturbances] No disturbanceOrigin rows found for ", Sector,
+              " in Enlarging; skipping.", call. = FALSE)
+      return(NULL)
+    }
+    if (length(whichOriginRaw) != length(whichOrigin)) {
+      message(crayon::yellow(paste0(
+        "[generateDisturbances] Duplicate origins for ", Sector, "; using unique values: ",
+        paste(whichOrigin, collapse = ",")
+      )))
+    }
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
       Lay <- disturbanceList[[Sector]][[ORIGIN]]
       if (is.null(Lay)) {
@@ -158,12 +333,12 @@ generateDisturbances <- function(disturbanceParameters,
           # so we get in the end a TOTAL increase in of 15 m.
           Lay <- terra::buffer(x = Lay, width = RES)
         }
-        currArea <- terra::expanse(Lay, unit = "m", transform = FALSE)
+        currArea <- sumExpanse(Lay, unit = "m", transform = FALSE)
       } else { # If the disturbanceRate Relates To Buffered Area (i.e., caribou-wise)
         # It doesn't matter if poly or lines or points, if buffered, is buffered to 500m
           LayBuff <- terra::buffer(Lay, width = 500) # Need to aggregate to avoid double counting!
           LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
-          currArea <- terra::expanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
+          currArea <- sumExpanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
         if (disturbanceRateRelatesToBufferedArea) 
           message(paste0("Buffered (500m) area for ", Sector, 
                        " -- ", ORIGIN, ": ", round(currArea/1000000, 2), " Km2"))
@@ -219,11 +394,11 @@ generateDisturbances <- function(disturbanceParameters,
           if (disturbanceRateRelatesToBufferedArea){
             LayUpdatedBuff <- terra::buffer(x = LayUpdated, width = 500)
             futureAreaAgg <- terra::aggregate(LayUpdatedBuff)
-            futureArea <- terra::expanse(futureAreaAgg, unit = "m", transform = FALSE)
+            futureArea <- sumExpanse(futureAreaAgg, unit = "m", transform = FALSE)
           } else {
-            futureArea <- terra::expanse(LayUpdated, unit = "m", transform = FALSE)
+            futureArea <- sumExpanse(LayUpdated, unit = "m", transform = FALSE)
           }
-          totalDisturbedAreaAchieved <- sum(futureArea)
+          totalDisturbedAreaAchieved <- futureArea
           iter <- iter + 1
         }
         tictoc::toc()
@@ -263,11 +438,19 @@ generateDisturbances <- function(disturbanceParameters,
   dPar <- disturbanceParameters[disturbanceType  %in% "Generating", ]
   whichSector <- dPar[["dataName"]]
   Generated <- lapply(whichSector, function(Sector) {
-    whichOrigin <- dPar[dataName == Sector, disturbanceOrigin]
-    if (length(whichOrigin) != 1) {
-      print("Repeated origins and sector. Debug")
-      browser()
-    } # Bug Catch
+    whichOriginRaw <- dPar[dataName == Sector, disturbanceOrigin]
+    whichOrigin <- unique(whichOriginRaw)
+    if (!length(whichOrigin)) {
+      warning("[generateDisturbances] No disturbanceOrigin rows found for ", Sector,
+              " in Generating; skipping.", call. = FALSE)
+      return(NULL)
+    }
+    if (length(whichOriginRaw) != length(whichOrigin)) {
+      message(crayon::yellow(paste0(
+        "[generateDisturbances] Duplicate origins for ", Sector, "; using unique values: ",
+        paste(whichOrigin, collapse = ",")
+      )))
+    }
     updatedL <- lapply(whichOrigin, function(ORIGIN) {
 
       dParOri <- dPar[dataName == Sector & disturbanceOrigin == ORIGIN,]
@@ -372,7 +555,7 @@ generateDisturbances <- function(disturbanceParameters,
         }
         LayBuff <- terra::buffer(Lay, width = 500) # Need to aggregate to avoid double counting!
         LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
-        currArea <- terra::expanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
+        currArea <- sumExpanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
         if (length(currArea) == 0){
           message(paste0("No disturbance for ", Sector, 
                          " -- ", ORIGIN, ": currentArea = 0 Km2"))
@@ -418,7 +601,11 @@ generateDisturbances <- function(disturbanceParameters,
                            round(100*(round(nPixChosenTotal, 0)/round(expectedDistPixels, 0)), 2),"% achieved)"))
           }
           # This is the size in meter square that each disturbance should have
-          Size <- round(eval(parse(text = dParOri[["disturbanceSize"]])), 0)
+          expr <- dParOri[["disturbanceSize"]]
+          # Ensure truncated-normal sampling uses fully-qualified msm::rtnorm
+          expr <- gsub("(?<!msm::)rtnorm\\(", "msm::rtnorm(", expr, perl = TRUE)
+          expr <- gsub("msm::msm::", "msm::", expr, fixed = TRUE)
+          Size <- round(eval(parse(text = expr)), 0)
           # Here I generate one disturbance at a time. 
           # This is the size as the number of pixels to be chosen IN m2!
           # totNPix is the number of pixels that correspont to totalstudyAreaVAreaSqKm
@@ -547,21 +734,35 @@ generateDisturbances <- function(disturbanceParameters,
         # get zero pixels if the size of each disturbance is not too big 
         # [UPDATE: This shouldn't happen anymore with the changes in the code]
       }
+      # Upper-bound requested pixels by available potential
+      availablePix <- sum(!is.na(terra::values(potLayF)))
+      if (is.finite(availablePix)) {
+        expectedDistPixels <- min(expectedDistPixels, availablePix)
+        totPixToChoose <- pmin(totPixToChoose, availablePix)
+      }
       # 4. Select which pixels are the most suitable and then get the number of neighbors based on 
       # the needed sizes
       # Can't forget to take pixels that already have disturbance out of the potential availability!
       # Otherwise it might choose pixels to disturb in existing disturbed ones
       # Second, bring the raster with masked disturbances into a table to choose the pixels
-      potLayF[allLaysRas[] == 1] <- NA
+      if (!is.null(allLaysRas)) {
+        potLayF[allLaysRas[] == 1] <- NA
+      } else if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+        message("[generateDisturbances] allLaysRas is NULL; skipping mask of existing disturbances")
+      }
       potentialDT <- na.omit(data.table(pixelID = 1:ncell(potLayF),
                                 vals = terra::values(potLayF)))
       # Third, subset the best pixels
-      if (max(unique(potentialDT[["vals"]])) %in% c(-Inf, Inf)){
-        message(paste0("max(unique(potentialDT[['vals']])) is ", max(unique(potentialDT[["vals"]])), 
-                       ". Please debug."))
-        browser()
+      potentialDT <- potentialDT[is.finite(vals)]
+      if (!nrow(potentialDT)) {
+        message(crayon::red(paste0(
+          "[generateDisturbances] No finite potential values for ", ORIGIN, " (", Sector,
+          "); skipping disturbance generation."
+        )))
+        return(NULL)
       }
-      bestPotential <- potentialDT[vals == max(unique(potentialDT[["vals"]])), pixelID]
+      potentialVals <- sort(unique(potentialDT[["vals"]]), decreasing = TRUE)
+      bestPotential <- potentialDT[vals == potentialVals[1], pixelID]
       # Then, randomly, choose the pixels. Here need to pay attention to choose one per "development"
       # and only then use the adjacent to get to the correct sizes.
       # length(totPixToChoose) --> is the number of pixels minus the ones that don't need adjacent. 
@@ -570,29 +771,46 @@ generateDisturbances <- function(disturbanceParameters,
       # should match very closely to expectedDistPixels
       allSelected <- FALSE
       if (sum(totPixToChoose) > length(bestPotential)){
-        # This means that the best potential is not enough. So we need to increase to the 2 best 
-        # potentials.
+        # This means that the best potential is not enough. So we need to increase to the 2 best
+        # potentials (and keep expanding until either we have enough or exhaust all potential).
         counter <- 1
-        while (sum(totPixToChoose) > length(bestPotential)){
-          classesToInclude <- 1:(counter+1)
+        while (sum(totPixToChoose) > length(bestPotential) &&
+               counter < length(potentialVals)) {
+          classesToInclude <- 1:min(counter + 1, length(potentialVals))
           # subset the best pixels
-          bestPotential <- potentialDT[vals %in% sort(decreasing = TRUE, 
-                                                    unique(potentialDT[["vals"]]))[classesToInclude], 
+          bestPotential <- potentialDT[vals %in% potentialVals[classesToInclude],
                                        pixelID]
-          counter <- counter+1
-          if (all(classesToInclude %in% unique(potentialDT[["vals"]]))){
-            message(crayon::red(paste0("All pixels available for ", ORIGIN, " have been selected. ",
-                                       "This distubance will remain static until the end of the ",
-                                       "simulation.")))
-            pixNewDist <- bestPotential
-            allSelected <- TRUE
-            break
-          }
+          counter <- counter + 1
+        }
+        if (sum(totPixToChoose) > length(bestPotential)) {
+          message(crayon::red(paste0("All pixels available for ", ORIGIN, " have been selected. ",
+                                     "This distubance will remain static until the end of the ",
+                                     "simulation.")))
+          pixNewDist <- bestPotential
+          allSelected <- TRUE
+        } else if (length(totPixToChoose) > length(bestPotential)) {
+          message(crayon::red(paste0("Number of requested disturbances for ", ORIGIN,
+                                     " exceeds available potential locations (", length(totPixToChoose),
+                                     " > ", length(bestPotential), "). Selecting all available cells.")))
+          pixNewDist <- bestPotential
+          allSelected <- TRUE
+        } else {
+          pixNewDist <- sample(x = bestPotential,
+                               size = length(totPixToChoose),
+                               replace = FALSE)
         }
       } else {
-        pixNewDist <- sample(x = bestPotential, 
-                             size = length(totPixToChoose), 
-                             replace = FALSE)
+        if (length(totPixToChoose) > length(bestPotential)) {
+          message(crayon::red(paste0("Number of requested disturbances for ", ORIGIN,
+                                     " exceeds available potential locations (", length(totPixToChoose),
+                                     " > ", length(bestPotential), "). Selecting all available cells.")))
+          pixNewDist <- bestPotential
+          allSelected <- TRUE
+        } else {
+          pixNewDist <- sample(x = bestPotential,
+                               size = length(totPixToChoose),
+                               replace = FALSE)
+        }
       }
       # We then need to identify the adjacent cells, if any of the values of totPixToChoose is > 1
       if (all(any(totPixToChoose > 1),
@@ -626,14 +844,22 @@ generateDisturbances <- function(disturbanceParameters,
                                   directions = nb, pairs = TRUE,
                                   include = FALSE, id = TRUE))
           # Now we sample the number of adjacents needed from the whole table, by ID (each pix that 
-          # needs those adjacents)
-          chosen <- Adj[,.SD[sample(.N, adjN)], by = "id"]
+          # needs those adjacents). If adjN exceeds available neighbours, fall back to sampling
+          # with replacement to keep execution stable.
+          chosen <- Adj[, {
+            n_to_sample <- min(.N, adjN)
+            .SD[sample(.N, n_to_sample, replace = n_to_sample > .N)]
+          }, by = "id"]
           return(c(unique(chosen[["from"]]), unique(chosen[["to"]])))
         })
         allPixAdj <- unique(as.numeric(unlist(allPixAdj)))
         whichPixelsChosen <- c(allPixAdj, pixDontNeedAdj)
       } else {
         whichPixelsChosen <- pixNewDist
+      }
+      # If we ended up with more pixels than requested, trim back to expectedDistPixels
+      if (length(whichPixelsChosen) > expectedDistPixels) {
+        whichPixelsChosen <- sample(whichPixelsChosen, expectedDistPixels)
       }
       # Now, we make a new disturbance layer. We need to keep track of the 
       # old one because we need to connect the new stuff. We can use RTM as a template.
@@ -659,6 +885,7 @@ generateDisturbances <- function(disturbanceParameters,
         totPixBuff <- nPixChosenTotal
         calcPerc <- (totPixBuff - expectedDistPixels)/expectedDistPixels
       } else {
+        totPixBuff <- length(whichPixelsChosen)
         calcPerc <- (length(whichPixelsChosen) - expectedDistPixels)/expectedDistPixels
       }
       
@@ -772,9 +999,11 @@ generateDisturbances <- function(disturbanceParameters,
         # oriLayVectSingle <- st_as_sf(oriLayVect) # For sf and st_connect. 
         # 3. use the st_connect or terra::nearest on it # Changed to terra's native nearest. Much faster!
         classEndLay <- na.omit(unique(endLay[["Class"]])) 
-        if (all(!is.null(connectingBlockSize),
-                NROW(oriLayVect) > connectingBlockSize)){
-          message(paste0("connectingBlockSize is not NULL and connecting layer has ", 
+        blockSize <- suppressWarnings(as.numeric(connectingBlockSize))
+        if (length(blockSize) != 1) blockSize <- NA_real_
+        blockIsActive <- isTRUE(is.finite(blockSize) && blockSize > 0)
+        if (blockIsActive && NROW(oriLayVect) > blockSize){
+          message(paste0("connectingBlockSize is ", blockSize, " and connecting layer has ", 
                          NROW(oriLayVect), " rows. Applying blocking technique to speed up",
                          "disturbance generation type connecting. ",
                          " If too many lines are connecting from the same place, decrease the",
@@ -782,14 +1011,14 @@ generateDisturbances <- function(disturbanceParameters,
                          "set it to NULL, which will improve final result, but needs considerable",
                          "more time to run."))
           blockFullList <- 1:NROW(oriLayVect)
-          amountBlocks <- ceiling(NROW(oriLayVect)/connectingBlockSize)
+          amountBlocks <- ceiling(NROW(oriLayVect)/blockSize)
           blockList <- list()
           for (i in 1:amountBlocks) {
-            if (length(blockFullList) <= connectingBlockSize){
+            if (length(blockFullList) <= blockSize){
               blockList[[i]] <- blockFullList
             } else {
               blockList[[i]] <- sample(x = blockFullList, 
-                                       size = connectingBlockSize, replace = FALSE)
+                                       size = blockSize, replace = FALSE)
               # Update the list
               blockFullList <- setdiff(blockFullList, blockList[[i]])
             }
@@ -807,12 +1036,17 @@ generateDisturbances <- function(disturbanceParameters,
             # 4. Update the endLayer with the new connection
             if (!is(connectedOne, "SpatVector"))
               connectedOne <- terra::vect(connectedOne)
-            if (exists("connected")){
-              connected <- rbind(connected, connectedOne)
+        connectWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+        if (exists("connected", inherits = FALSE) && !is.null(connected)){
+          connected <- safeMergeSpatVectors(list(connected, connectedOne),
+                                            context = "connecting block merge",
+                                            bufferWidth = connectWidth)
             } else {
               connected <- connectedOne
             }
-            endLay <- rbind(endLay, connectedOne)
+            endLay <- safeMergeSpatVectors(list(endLay, connectedOne),
+                                           context = "connecting end lay",
+                                           bufferWidth = connectWidth)
           }          
         } else {
           # message(paste0("connectingBlockSize is ", 
@@ -834,25 +1068,33 @@ generateDisturbances <- function(disturbanceParameters,
             # 4. Update the endLayer with the new connection
             if (!is(connectedOne, "SpatVector"))
               connectedOne <- terra::vect(connectedOne)
-            if (exists("connected")){
-              connected <- rbind(connected, connectedOne)
+            connectWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+            if (exists("connected", inherits = FALSE) && !is.null(connected)){
+              connected <- safeMergeSpatVectors(list(connected, connectedOne),
+                                                context = "connecting block merge",
+                                                bufferWidth = connectWidth)
             } else {
               connected <- connectedOne
             }
-            endLay <- rbind(endLay, connectedOne)
+            endLay <- safeMergeSpatVectors(list(endLay, connectedOne),
+                                           context = "connecting end lay",
+                                           bufferWidth = connectWidth)
           }
-        } 
+        }
         connected[["Class"]] <- classEndLay
         Lay <- list(connected)
         names(Lay) <- disturbanceEnd
         if (disturbanceRateRelatesToBufferedArea){
-          if (length(disturbanceEnd)>1){
-            print("Size > 1. Debug")
-            browser()
-          } 
+          if (length(disturbanceEnd) > 1){
+            warning("[generateDisturbances] Multiple disturbanceEnd targets found (",
+                    paste(disturbanceEnd, collapse = ","), "); using the first entry.",
+                    call. = FALSE)
+            disturbanceEnd <- disturbanceEnd[1]
+            names(Lay) <- disturbanceEnd
+          }
           LayBuff <- terra::buffer(Lay[[disturbanceEnd]], width = 500) # Need to aggregate to avoid double counting!
           LayBuff <- terra::aggregate(x = LayBuff, dissolve = TRUE)
-          currArea <- terra::expanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
+          currArea <- sumExpanse(LayBuff, unit = "m", transform = FALSE) # NEEDS TO BE METERS. USED BELOW
           message(paste0("Buffered (500m) area for ", Sector, 
                          " -- ", disturbanceEnd, ": ", round(currArea/1000000, 2), " Km2"))
           message(paste0("Percentage of current area: ", round(100*((currArea/1000000)/totalstudyAreaVAreaSqKm), 3), "%."))
@@ -863,38 +1105,37 @@ generateDisturbances <- function(disturbanceParameters,
   # Mash together what has the same name
   # Which Sector has layers that are the same?
 
-  nms <- names(unlist(lapply(Connected, names)))
-  whichSectorHasOne <- unique(nms[ave(seq_along(nms), nms, FUN = length)==1])
-  # To control for other cases:
-  whichSectorHasMoreThanOne <- unique(nms[ave(seq_along(nms), nms, FUN = length)>1])
-  if (length(whichSectorHasMoreThanOne) > 1){
-    stop(paste0("There are at least two sectors with more than one layers to merge, which is",
-                "currently not supported. ",
-                "Please re-code (line 615 of generateDisturbances.R) to allow for this case"))
-  }
-  toMerge <- unlist(Connected)[which(!names(Connected) %in% whichSectorHasOne)]
-  names(toMerge) <- NULL
-  merged <- list(do.call(rbind, toMerge))
-  nm <- unique(names(Connected[[whichSectorHasMoreThanOne]]))
-  names(merged) <- nm # Second level 
-  
-  merged <- list(merged)
-  names(merged) <- whichSectorHasMoreThanOne # First level
-
-  # Replace the merged class in the Connected object
-  updatedToMerge <- Connected[names(Connected) %in% whichSectorHasOne]
-  Connected <- c(updatedToMerge, merged)
+  Connected <- lapply(Connected, function(layerList) {
+    if (!is.list(layerList)) return(layerList)
+    layerList <- Filter(Negate(is.null), layerList)
+    if (!length(layerList)) return(layerList)
+    layerList <- Filter(function(x) {
+      inherits(x, "SpatVector") && tryCatch(nrow(x) > 0L, error = function(...) FALSE)
+    }, layerList)
+    if (!length(layerList)) return(layerList)
+    if (length(layerList) == 1L) return(layerList)
+    mergeWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+    mergedLayer <- safeMergeSpatVectors(layerList,
+                                        context = "connecting layers",
+                                        bufferWidth = mergeWidth)
+    if (is.null(mergedLayer)) return(layerList)
+    mergedName <- names(layerList)
+    mergedName <- mergedName[nzchar(mergedName)]
+    out <- list(mergedLayer)
+    if (length(mergedName)) names(out) <- mergedName[1]
+    out
+  })
   
   # LAST: Updating and returning
   #############################################
 
   # Put all updated layers in a list to return
-  individuaLayers <- c(Enlarged, Generated, Connected)
+  individualLayers <- c(Enlarged, Generated, Connected)
   
   # Now merge all disturbances (raster format) to avoid creating new disturbances where it has 
   # already been disturbed
 
-  currentDisturbance <- copy(individuaLayers)
+  currentDisturbance <- copy(individualLayers)
   # DEPRECATING BELOW: Instead of converting all to raster, convert ras to polys and keep all as vects
   # curDistRas <- lapply(1:length(currentDisturbance), function(index1){
   #   SECTOR <- names(currentDisturbance)[index1]
@@ -965,48 +1206,67 @@ generateDisturbances <- function(disturbanceParameters,
   # } else {
   #   stop("The amount of rasters doesn't match the amount of names. Please debug.")
   # }
-  curDistRas <- lapply(1:length(currentDisturbance), function(index1){
+  curDistRas <- lapply(seq_along(currentDisturbance), function(index1){
     SECTOR <- names(currentDisturbance)[index1]
-    curDistRas <- lapply(1:length(currentDisturbance[[index1]]), function(index2){
-      Class <- names(currentDisturbance[[index1]])[index2]
-      ras <- currentDisturbance[[index1]][[index2]]
-      isNULLras <- is.null(ras)
-      isMAX0ras <- if (is(ras, "SpatVector"))
-        length(ras) == 0 else
-          max(ras[], na.rm = TRUE) == 0
-      if (any(isNULLras, isMAX0ras)){
+    sectorLayers <- currentDisturbance[[index1]]
+    classNames <- names(sectorLayers)
+    converted <- lapply(classNames, function(Class){
+      ras <- sectorLayers[[Class]]
+      if (is.null(ras)) {
         message(paste0(Class, " of ", SECTOR, " is NULL. Returning NULL"))
         return(NULL)
       }
-      if (class(ras) %in% c("RasterLayer", "SpatRaster")){
+      isEmpty <- FALSE
+      if (inherits(ras, "SpatVector")) {
+        isEmpty <- length(ras) == 0
+      } else {
+        vals <- tryCatch(ras[], error = function(...) NULL)
+        if (is.null(vals)) {
+          isEmpty <- TRUE
+        } else {
+          vals <- vals[!is.na(vals)]
+          isEmpty <- !length(vals) || max(vals, na.rm = TRUE) == 0
+        }
+      }
+      if (isEmpty) {
+        message(paste0(Class, " of ", SECTOR, " is empty. Returning NULL"))
+        return(NULL)
+      }
+      if (inherits(ras, c("RasterLayer", "SpatRaster"))){
         message(paste0("Converting ", Class, " of ", SECTOR, " from raster to vector..."))
-        if (!is(ras, "SpatRaster"))
+        if (!inherits(ras, "SpatRaster"))
           ras <- rast(ras)
         ras[ras != 1] <- NA
         currentDisturbanceLay <- terra::as.polygons(ras)
         return(currentDisturbanceLay)
-      } else {
-        if (!is(ras, "SpatVector")){
-          message(paste0(Class, " of ", SECTOR, " is not SpatVector, converting to it..."))
-          ras <- rast(ras)
-        } else {
-          message(paste0(Class, " of ", SECTOR, " is either already a SpatVector or NULL, skipping conversion..."))
-        }
-        return(ras)
       }
+      if (!inherits(ras, "SpatVector")){
+        message(paste0(Class, " of ", SECTOR, " is not SpatVector, converting to it..."))
+        ras <- terra::vect(ras)
+      } else {
+        message(paste0(Class, " of ", SECTOR, " is either already a SpatVector or NULL, skipping conversion..."))
+      }
+      geomType <- tryCatch(terra::geomtype(ras), error = function(...) NA_character_)
+      if (!is.na(geomType) && !identical(geomType, "polygons")) {
+        baseWidth <- tryCatch(res(rasterToMatch)[1], error = function(...) NA_real_)
+        if (is.na(baseWidth) || baseWidth <= 0) baseWidth <- 15
+        width <- if (identical(geomType, "points")) baseWidth/2 else baseWidth
+        if (isTRUE(getOption("run_scenario.debug", FALSE))) {
+          message("[generateDisturbances] buffering ", Class, " of ", SECTOR,
+                  " (geom=", geomType, ") to width=", signif(width, 4))
+        }
+        ras <- terra::buffer(ras, width = width)
+        ras <- terra::aggregate(ras, dissolve = TRUE)
+      }
+      ras
     })
-    if (length(curDistRas) == length(names(currentDisturbance[[index1]]))){
-      names(curDistRas) <- names(currentDisturbance[[index1]])
-    } else {
-      stop("The amount of rasters doesn't match the amount of names. Please debug.")
-    }
-    return(curDistRas)
+    names(converted) <- classNames
+    converted <- Filter(Negate(is.null), converted)
+    if (!length(converted)) return(NULL)
+    converted
   })
-  if (length(curDistRas) == length(names(currentDisturbance))){
-    names(curDistRas) <- names(currentDisturbance)
-  } else {
-    stop("The amount of rasters doesn't match the amount of names. Please debug.")
-  }
+  names(curDistRas) <- names(currentDisturbance)
+  curDistRas <- Filter(Negate(is.null), curDistRas)
   # BELOW IS DEPRECATED AS WE ARE NOT DEALING WITH RASTERS ANYMORE
   # Make sure to return which ones are NULL and clean them up.
   # curDistList <- unlist(curDistRas)
@@ -1067,8 +1327,15 @@ generateDisturbances <- function(disturbanceParameters,
       buffVect <- terra::aggregate(buffVect, dissolve = TRUE)
       return(buffVect)
     })
-    newDisturbanceLayers <- do.call(rbind, curDistVcsAll)
-    newDisturbanceLayers <- terra::aggregate(newDisturbanceLayers, dissolve = TRUE)
+    curDistVcsAll <- Filter(Negate(is.null), curDistVcsAll)
+    mergeWidth <- tryCatch(res(rasterToMatchR)[1], error = function(...) NA_real_)
+    newDisturbanceLayers <- safeMergeSpatVectors(curDistVcsAll,
+                                                 context = "buffered disturbance vectors",
+                                                 bufferWidth = mergeWidth,
+                                                 targetCRS = terra::crs(rasterToMatchR))
+    if (!is.null(newDisturbanceLayers)) {
+      newDisturbanceLayers <- terra::aggregate(newDisturbanceLayers, dissolve = TRUE)
+    }
     
     # Now I get the previous layers and do the same
     oldDisturbanceLayers <- createBufferedDisturbances(disturbanceList = disturbanceList, 
@@ -1078,10 +1345,10 @@ generateDisturbances <- function(disturbanceParameters,
                                                                    currentTime = currentTime,
                                                                    convertToRaster = FALSE)
     
-    newDisturbanceLayers$totAreaKm2 <- terra::expanse(newDisturbanceLayers, 
-                                                      unit = "km", transform = FALSE) 
-    oldDisturbanceLayers$totAreaKm2 <- terra::expanse(oldDisturbanceLayers, 
-                                                      unit = "km", transform = FALSE) 
+    newDisturbanceLayers$totAreaKm2 <- expanse_vec(newDisturbanceLayers, 
+                                                   unit = "km", transform = FALSE) 
+    oldDisturbanceLayers$totAreaKm2 <- expanse_vec(oldDisturbanceLayers, 
+                                                   unit = "km", transform = FALSE) 
     
     message(paste0("Buffered 500m (polygons) old disturbance percent of the area (",currentTime,"): ", 
                    round(100*(oldDisturbanceLayers$totAreaKm2/totalstudyAreaVAreaSqKm), 3), "%."))
@@ -1096,6 +1363,6 @@ generateDisturbances <- function(disturbanceParameters,
   
   ### RETURN!
   
-  list(individuaLayers = individuaLayers, 
+  list(individualLayers = individualLayers, 
        currentDisturbanceLayer = curDistRas)
 }
