@@ -4,3 +4,5 @@
 ## don't ignore
 !CHECKSUMS.txt
 !.gitignore
+!testing/
+!testing/**

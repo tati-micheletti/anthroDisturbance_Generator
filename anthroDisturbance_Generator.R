@@ -25,11 +25,11 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
-  reqdPkgs = list("SpaDES.core (>= 2.1.5.9003)", "ggplot2", "googledrive",
-                  "data.table", "PredictiveEcology/reproducible",
-                  "raster", "terra", "crayon", "sf", 
-                  "fasterize", "tictoc", "roads", "spaths", "truncnorm",
-                  "foreach", "doParallel", "digest"),
+  reqdPkgs = list("SpaDES.core", "googledrive",
+                  "data.table", "reproducible", "geodata",
+                  "raster", "terra", "crayon", "msm", "sf",
+                  "fasterize", "tictoc", "roads", "truncnorm",
+                  "foreach", "doParallel", "digest", "ggplot2"),
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -77,7 +77,8 @@ defineModule(sim, list(
                            "If TRUE, it saves at the end of each step.")),
     defineParameter("disturbanceRateRelatesToBufferedArea", "logical", TRUE, NA, NA,
                     paste0("Is the DisturbanceRate a % of already buffered (to 500m) disturbance?",
-                           " This is normally what is used for caribou.")),
+                           " This is normally what is used for caribou. Seismic lines generation always use",
+                           " buffered-area accounting regardless of this flag.")),
     defineParameter("growthStepEnlargingPolys", "numeric", 1, NA, NA,
                     paste0("Growth step used for iteratively achieving the total area growth of ",
                            "new disturbances type Enlarging for polygons. If the iterations take too",
@@ -89,11 +90,12 @@ defineModule(sim, list(
                            " long, one should increase this number. If the summarized value is too",
                            " far from 0, one should decrease this number.",
                            " Not used if disturbanceRateRelatesToBufferedArea == TRUE")),
-    defineParameter("growthStepEnlargingLines", "numeric", 1, NA, NA,
+    defineParameter("growthStepEnlargingLines", "numeric", NA, NA, NA,
                     paste0("Growth step used for iteratively achieving the total area growth of ",
-                           "new disturbances type Enlarging for lines. If the iterations take too",
-                           " long, one should increase this number. If the summarized value is too",
-                           " far from 0, one should decrease this number.")),
+                           "new disturbances type Enlarging for lines. Defaults to NA, which lets ",
+                           "the module estimate a reasonable step (notably for seismic clustering). ",
+                           "If the iterations take too long, set a larger fixed value; if the ",
+                           "summarized value is too large, set a smaller fixed value.")),
     defineParameter("connectingBlockSize", "numeric", NULL, NA, NA,
                     paste0("connectingBlockSize defaults to NULL. It is used to connecting layers ",
                            "after generation. Applying blocking technique speeds up disturbance.",
@@ -102,10 +104,12 @@ defineModule(sim, list(
     defineParameter(".runName", "character", "run1", NA, NA,
                     paste0("If you would like your simulations' results to have an appended name ",
                            "(i.e., replicate number, study area, etc) you can use this parameter")),
-    defineParameter("seismicLineGrids", "numeric", 500, NA, NA,
+    defineParameter("seismicLineGrids", "numeric", NULL, NA, NA,
                     paste0("How many grids concomitantly should the model produce when creating ",
-                           " seismic lines? Defaults to 500. If seismic disturbance is being ",
-                           "produced over the expected amount, please provide smaller values.")),
+                           " seismic lines? Defaults to NULL, which auto-estimates a value from ",
+                           "seismic lines in the study area together with seismic rates and their ",
+                           "run interval. If seismic disturbance is being produced over the expected ",
+                           "amount, please provide smaller values.")),
     defineParameter(".inputFolderFireLayer", "character", Paths[["inputPath"]], NA, NA,
                     paste0("If you have the fire (i.e., rstCurrBurn) in a folder that is NOT the ",
                            "inputs folder, you can pass it here")),
@@ -197,6 +201,9 @@ defineModule(sim, list(
                     paste0("Suffix indicating the years compared for the",
                            "difference calculation of disturbances rate. Needs to be ",
                            "in the format OLDYEAR_NEWYEAR")),
+    defineParameter("verboseDiagnostics", "logical", FALSE, NA, NA,
+                    paste0("If TRUE, prints a per-class diagnostics table each decade with ",
+                           "origin/potential presence, rate and size flags to help debug gating.")),
     defineParameter("archiveNEW", "character", paste0("ECCC_2015_anthro_dist_corrected_to_NT1_2016",
                                                       "_final.zip"), NA, NA,
                     "Filename of the newer archive dataset (zip file)."),
@@ -429,13 +436,22 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   switch(
     eventType,
     init = {
-      # Make sure siteSelectionAsDistributing is either 
-      if (!P(sim)$siteSelectionAsDistributing %in% c(NA, unique(sim$disturbanceParameters$disturbanceOrigin)))
-        stop(paste0("Only disturbances provided in disturbanceOrigin column of object ",
-                    "disturbanceParameters are accepted for parameter siteSelectionAsDistributing. ",
-                    "Please provide NA or any combination of the following: ", 
-                    paste(unique(sim$disturbanceParameters$disturbanceOrigin), collapse = ", ")
-        ))
+      siteSel <- P(sim)$siteSelectionAsDistributing
+      if (!is.null(siteSel)) {
+        siteSel <- siteSel[!(is.na(siteSel) | siteSel %in% c("", "NA"))]
+        if (length(siteSel)) {
+          validOrigins <- unique(sim$disturbanceParameters$disturbanceOrigin)
+          invalid <- setdiff(siteSel, validOrigins)
+          if (length(invalid)) {
+            stop(paste0(
+              "Only disturbances provided in disturbanceParameters$disturbanceOrigin are accepted for ",
+              "parameter siteSelectionAsDistributing. Invalid entries: ",
+              paste(invalid, collapse = ", "), ". Valid options are: ",
+              paste(validOrigins, collapse = ", ")
+            ))
+          }
+        }
+      }
       
       # Make sure RTM and studyArea projections match
       sim$studyArea <- projectInputs(sim$studyArea, 
@@ -457,18 +473,21 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       sim$currentDisturbanceLayer <- list()
       
       ### Make sure that growthStepEnlargingLines and growthStepEnlargingPolys are > 0
-      
-      if (P(sim)$growthStepEnlargingLines <= 0){
-        warning(paste0("growthStepEnlargingLines needs to be > 1 but is currently set to ", 
-                       P(sim)$growthStepEnlargingLines, ". Overriding it to 1"), immediate. = TRUE)
-        P(sim)$growthStepEnlargingLines <- 1
+      normalizeGrowthStep <- function(value, paramName) {
+        # NA/NULL means "auto-tune later"
+        if (is.null(value) || (length(value) == 1L && is.na(value))) return(NA_real_)
+        step <- suppressWarnings(as.numeric(value))
+        if (!is.finite(step) || step <= 0) {
+          warning(paste0(paramName, " needs to be > 0 but is currently set to ",
+                         value, ". Overriding it to 1"), immediate. = TRUE)
+          step <- 1
+        }
+        step
       }
-      
-      if (P(sim)$growthStepEnlargingPolys <= 0){
-        warning(paste0("growthStepEnlargingLines needs to be > 1 but is currently set to ", 
-                       P(sim)$growthStepEnlargingPolys, ". Overriding it to 1"), immediate. = TRUE)
-        P(sim)$growthStepEnlargingPolys <- 1
-      }
+      P(sim)$growthStepEnlargingLines <- normalizeGrowthStep(P(sim)$growthStepEnlargingLines,
+                                                             "growthStepEnlargingLines")
+      P(sim)$growthStepEnlargingPolys <- normalizeGrowthStep(P(sim)$growthStepEnlargingPolys,
+                                                             "growthStepEnlargingPolys")
       
       # Make sure the parameter diffYears has the correct format
       parts <- strsplit(P(sim)$diffYears, "_")[[1]] # [[1]] extracts the vector
@@ -516,7 +535,21 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       # Check for needed rates. If all provided, skip event
       mod$.whichNeedRates <- which(sim$disturbanceParameters[, disturbanceType %in% c("Generating", "Enlarging") &
                                                                is.na(disturbanceRate)])
-      if (length(mod$.whichNeedRates) != 0)
+      if (length(mod$.whichNeedRates) != 0) {
+        distRateArg <- sim$DisturbanceRate
+        totalRate <- P(sim)$totalDisturbanceRate
+        if (!is.null(totalRate) && !is.na(totalRate)) {
+          distRateArg <- NULL
+        } else if (!is.null(distRateArg)) {
+          isEmptyAtomic <- is.atomic(distRateArg) && length(distRateArg) == 0
+          isEmptyDf <- is.data.frame(distRateArg) && nrow(distRateArg) == 0
+          if (isEmptyAtomic || isEmptyDf) {
+            distRateArg <- NULL
+          } else if (!data.table::is.data.table(distRateArg) && !is.data.frame(distRateArg)) {
+            warning("DisturbanceRate supplied but not a table; ignoring this input.", immediate. = TRUE)
+            distRateArg <- NULL
+          }
+        }
         sim$disturbanceParameters <- calculateRate(disturbanceParameters = sim$disturbanceParameters,
                                                    whichToUpdate = mod$.whichNeedRates,
                                                    studyArea = sim$studyArea,
@@ -525,7 +558,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                    disturbanceDT = sim$disturbanceDT,
                                                    destinationPath = Paths[["inputPath"]],
                                                    totalDisturbanceRate = P(sim)$totalDisturbanceRate,
-                                                   DisturbanceRate = sim$DisturbanceRate,
+                                                   DisturbanceRate = distRateArg,
                                                    disturbanceRateRelatesToBufferedArea = P(sim)$disturbanceRateRelatesToBufferedArea,
                                                    maskOutLinesFromPolys = P(sim)$maskOutLinesFromPolys,
                                                    aggregateSameDisturbances = P(sim)$aggregateSameDisturbances,
@@ -536,9 +569,17 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                    archiveOLD = P(sim)$archiveOLD,
                                                    targetFileOLD = P(sim)$targetFileOLD,
                                                    urlOLD = P(sim)$urlOLD
-                                                   )
+        )
+      }
+      if (isTRUE(P(sim)$verboseDiagnostics)) {
+        # emit a concise diagnostics report after rates are determined
+        try(writeDiagnostics(sim), silent = TRUE)
+      }
     },
     generatingDisturbances = {
+      
+      # make sure .firstYear exists 
+      if (is.null(mod$.firstYear) || length(mod$.firstYear) != 1L) mod$.firstYear <- NA
       
       if (all(P(sim)$saveInitialDisturbances,
               start(sim) == time(sim))){
@@ -559,10 +600,25 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                         paste0("bufferedAnthDist_500m_", 
                                                time(sim), ".tif"))
         
-        message(paste0("Writing buffered disturbance layer for ", time(sim)))
-        terra::writeRaster(initialBufferedAnthropogenicDisturbance500m, 
-                           filename = anthroDistFilePath,
-                           overwrite = TRUE)
+        lyr_count <- tryCatch({
+          if (inherits(initialBufferedAnthropogenicDisturbance500m, "SpatRaster"))
+            terra::nlyr(initialBufferedAnthropogenicDisturbance500m)
+          else if (inherits(initialBufferedAnthropogenicDisturbance500m, "Raster"))
+            raster::nlayers(initialBufferedAnthropogenicDisturbance500m)
+          else NA_integer_
+        }, error = function(...) NA_integer_)
+        message(paste0("Writing buffered disturbance layer for ", time(sim),
+                       " (layers: ", lyr_count, ") to ", anthroDistFilePath))
+        tryCatch(
+          terra::writeRaster(initialBufferedAnthropogenicDisturbance500m, 
+                             filename = anthroDistFilePath,
+                             overwrite = TRUE),
+          error = function(e) stop(sprintf("writeRaster failed for bufferedAnthDist (%d layers, class %s) -> %s: %s",
+                                           lyr_count,
+                                           paste(class(initialBufferedAnthropogenicDisturbance500m), collapse = ","),
+                                           anthroDistFilePath,
+                                           conditionMessage(e)))
+        )
       }
       
       # Check if the time(sim) is within the interval to run the disturbances
@@ -582,7 +638,15 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                     endTime = end(sim),
                                     disturbanceParameters = sim$disturbanceParameters)
       }
+      # emit a diagnostics snapshot at the beginning of the decade if requested
+      if (isTRUE(P(sim)$verboseDiagnostics)) {
+        try(writeDiagnostics(sim, scheduledIdx = mod$.whichToRun), silent = TRUE)
+      }
+
       if (length(mod$.whichToRun) != 0){ # If anything is scheduled
+        # subset to include only scheduled disturbances to generate
+        dpar_run <- sim$disturbanceParameters[mod$.whichToRun]
+        
         forestryScheduled <- "forestry" %in% sim$disturbanceParameters[mod$.whichToRun, dataName]
         if (forestryScheduled) { # forestry scheduled?
           if (is.null(sim$rstCurrentBurn)){
@@ -605,8 +669,9 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
         }, error = function(e){
           return(NULL) 
         })
+
         if (P(sim)$generatedDisturbanceAsRaster){
-          mod$updatedLayers <- generateDisturbances(disturbanceParameters = sim$disturbanceParameters,
+          mod$updatedLayers <- generateDisturbances(disturbanceParameters = dpar_run,
                                                     disturbanceList = sim$disturbanceList,
                                                     currentTime = time(sim),
                                                     studyArea = sim$studyArea,
@@ -622,7 +687,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                     runName = P(sim)$.runName,
                                                     checkDisturbancesForBuffer = P(sim)$checkDisturbancesForBuffer)
         } else {
-          mod$updatedLayers <- generateDisturbancesShp(disturbanceParameters = sim$disturbanceParameters,
+          mod$updatedLayers <- generateDisturbancesShp(disturbanceParameters = dpar_run,
                                                        disturbanceList = sim$disturbanceList,
                                                        currentTime = time(sim),
                                                        studyArea = sim$studyArea,
@@ -658,17 +723,60 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
       sim <- scheduleEvent(sim, time(sim) + P(sim)$runInterval, "anthroDisturbance_Generator", "generatingDisturbances")
     },
     updatingDisturbanceList = {
-      if (length(mod$.whichToRun) != 0){
-        sim$disturbanceList <- replaceListFast(disturbanceList = sim$disturbanceList,
-                                               updatedLayersAll = mod$updatedLayers,
-                                               currentTime = time(sim),
-                                               disturbanceParameters = sim$disturbanceParameters)
+      if (length(mod$.whichToRun) != 0) {
+        if (isTRUE(getOption("anthroDisturbance.dumpUpdatedLayers", FALSE))) {
+          dump_dir <- file.path(getOption("spades.scratchPath", "."),
+                                "debug_updatedLayers")
+          dir.create(dump_dir, recursive = TRUE, showWarnings = FALSE)
+          dump_file <- file.path(
+            dump_dir,
+            paste0("updatedLayers_year", time(sim), "_", P(sim)$.runName, ".rds")
+          )
+          convert_to_sf <- function(obj) {
+            if (is.null(obj)) return(NULL)
+            if (!inherits(obj, c("SpatVector", "sf"))) return(NULL)
+            tryCatch(sf::st_as_sf(obj), error = function(e) NULL)
+          }
+          sanitize_layers <- function(lst) {
+            if (is.null(lst)) return(NULL)
+            lapply(lst, function(sec) {
+              if (is.null(sec)) return(NULL)
+              lapply(sec, convert_to_sf)
+            })
+          }
+          dump_obj <- list(
+            updatedLayers = list(
+              individualLayers = sanitize_layers(mod$updatedLayers$individualLayers),
+              currentDisturbanceLayer = sanitize_layers(mod$updatedLayers$currentDisturbanceLayer),
+              seismicLinesFirstYear = sanitize_layers(mod$updatedLayers$seismicLinesFirstYear)
+            ),
+            currentTime = time(sim),
+            runName = P(sim)$.runName
+          )
+          try(saveRDS(dump_obj, dump_file), silent = TRUE)
+        }
+        delta <- replaceListFast(
+          disturbanceList       = sim$disturbanceList,
+          updatedLayersAll      = mod$updatedLayers,
+          currentTime           = time(sim),
+          disturbanceParameters = sim$disturbanceParameters
+        )
         
-        if (P(sim)$saveCurrentDisturbances){
+        ## Merge per sector, per layer (do NOT drop sectors that didn’t update)
+        if (!is.null(delta) && length(delta)) {
+          for (sec in names(delta)) {
+            if (is.null(delta[[sec]])) next
+            if (is.null(sim$disturbanceList[[sec]])) sim$disturbanceList[[sec]] <- list()
+            for (lay in names(delta[[sec]])) {
+              sim$disturbanceList[[sec]][[lay]] <- delta[[sec]][[lay]]
+            }
+          }
+        }
+        
+        if (P(sim)$saveCurrentDisturbances) {
           message(paste0("Saving current disturbances for year ", time(sim)))
           saveDisturbances(disturbanceList = sim$disturbanceList,
-                           currentTime = time(sim), 
-                           overwrite = TRUE,
+                           currentTime = time(sim), overwrite = TRUE,
                            runName = P(sim)$.runName)
         }
       }
@@ -707,15 +815,36 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
     sim$disturbanceList <- unwrapTerraList(terraList = extractURL("disturbanceList"), 
                                            generalPath = dataPath(sim))
     
+    target_crs <- tryCatch(terra::crs(sim$rasterToMatch), error = function(...) NA_character_)
+    if (!is.na(target_crs) && nzchar(target_crs)) {
+      project_spatial <- function(obj) {
+        if (is.null(obj)) return(obj)
+        if (inherits(obj, c("SpatVector", "SpatRaster"))) {
+          return(tryCatch(terra::project(obj, target_crs), error = function(...) obj))
+        }
+        obj
+      }
+      sim$disturbanceList <- lapply(sim$disturbanceList, function(sec) {
+        if (!is.list(sec)) return(sec)
+        lapply(sec, project_spatial)
+      })
+      message(crayon::green("Reprojected disturbanceList geometries to match rasterToMatch CRS"))
+    }
+    
     message(crayon::red(paste0("disturbanceList was not supplied. The current should only ",
                                " be used for module testing purposes ! Please run the module(s) ",
                                "`anthroDisturbance_DataPrep` and `potentialResourcesNT_DataPrep`")))
   }
   
   if (!suppliedElsewhere(object = "disturbanceParameters", sim = sim)) {
-    sim$disturbanceParameters <- data.table(dget(file = paste0("https://raw.githubusercontent.com",
-                                                               "/tati-micheletti/anthroDisturbance_Generator",
-                                                               "/refs/heads/main/data/paramsGeneral.txt")))
+    localParam <- file.path(modulePath(sim), currentModule(sim), "data", "paramsGeneral.txt")
+    if (file.exists(localParam)) {
+      sim$disturbanceParameters <- data.table(dget(file = localParam))
+    } else {
+      sim$disturbanceParameters <- data.table(dget(file = paste0("https://raw.githubusercontent.com",
+                                                                 "/tati-micheletti/anthroDisturbance_Generator",
+                                                                 "/refs/heads/main/data/paramsGeneral.txt")))
+    }
     # Example Disturbance Parameters for the whole NT1
     # sim$disturbanceParameters <- prepInputs(url = extractURL("disturbanceParameters"),
     #                                         targetFile = "disturbanceParameters.csv",
@@ -778,4 +907,3 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   }
   return(invisible(sim))
 }
-
