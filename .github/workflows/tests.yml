@@ -2,7 +2,7 @@ name: Tests and Coverage
 
 on:
   push:
-    branches: [main]
+    branches: [main, Testing]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -18,6 +18,7 @@ env:
   # Thesis-era coverage threshold.
   COVERAGE_MIN: 0
   HEAVY_TESTS: test-generateDisturbances.R,test-generateDisturbancesShp.R,test-anthroDisturbance_Generator.R
+  AGGREGATE_REPO: RonCatK/RonCatK-anthroDisturbance_Thesis
   NOT_CRAN: true
   R_PROFILE_USER: /dev/null
   R_PROFILE: /dev/null
@@ -207,3 +208,20 @@ jobs:
           name: tests-${{ env.MODE }}
           path: artifacts/tests/${{ env.MODE }}
           if-no-files-found: warn
+
+      - name: Dispatch aggregator (optional)
+        if: ${{ env.AGGREGATE_REPO != '' && env.MODE != '' }}
+        env:
+          AGGREGATOR_TOKEN: ${{ secrets.AGGREGATOR_TOKEN }}
+        run: |
+          if [ -z "$AGGREGATOR_TOKEN" ]; then
+            echo "No AGGREGATOR_TOKEN provided; skipping dispatch."
+            exit 0
+          fi
+          COVERAGE=$(grep -o '[0-9.]*' artifacts/tests/"$MODE"/coverage.txt | head -n1)
+          payload=$(jq -n --arg module "anthroDisturbance_Generator" --arg mode "$MODE" --arg coverage "$COVERAGE" '{module:$module,mode:$mode,coverage:$coverage}')
+          curl -X POST \
+            -H "Authorization: token $AGGREGATOR_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ env.AGGREGATE_REPO }}/dispatches \
+            -d "{\"event_type\":\"module-ci-report\",\"client_payload\":$payload}"
