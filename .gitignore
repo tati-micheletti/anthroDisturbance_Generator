@@ -42,3 +42,6 @@ libraryCIMP/
 # inputs and outputs
 inputs/
 outputs/
+
+# Testing sanity checks
+Concept Code.R

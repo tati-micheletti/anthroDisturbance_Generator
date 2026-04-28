@@ -2,6 +2,9 @@ calculateSize <- function(disturbanceParameters,
                           disturbanceList,
                           whichToUpdate){
   dP <- disturbanceParameters[whichToUpdate, ]
+  if (length(whichToUpdate) == 0L || NROW(dP) == 0L)
+    return(disturbanceParameters)
+  
   updatedDisturbanceParameters <- rbindlist(lapply(1:NROW(dP), function(INDEX){
     # Get the row to be calculated
     sub <- dP[INDEX, ]
@@ -36,9 +39,9 @@ calculateSize <- function(disturbanceParameters,
         sub <- NULL
       # }
     } else {
-      if (class(lay) %in% c("RasterLayer", "SpatRaster")) {
+      if (inherits(lay, "RasterLayer") || inherits(lay, "SpatRaster")) {
         message(paste0("The layer ", sub[["dataClass"]], " is not a vector. Trying to convert."))
-        if (lay %in% "RasterLayer") lay <- rast(lay)
+        if (inherits(lay, "RasterLayer")) lay <- rast(lay)
         lay <- as.polygons(lay, dissolve = FALSE)
       }
       if (geomtype(lay) %in% c("lines")){
@@ -46,8 +49,20 @@ calculateSize <- function(disturbanceParameters,
       } else {
         allAreas <- terra::expanse(lay, transform = FALSE, unit = "m")
       }
-      SDcalc <- if (is.na(round(sd(allAreas), 2))) 0 else round(sd(allAreas), 2)
-      sub[, disturbanceSize := paste0("rtnorm(1, ", round(mean(allAreas), 2), ", ", SDcalc, ", lower = 0)")]
+      
+      meanArea <- round(mean(allAreas), 2)
+      sdArea   <- round(stats::sd(allAreas), 2)
+      
+      # Fallbacks for degenerate/constant inputs
+      if (!is.finite(meanArea) || meanArea <= 0) meanArea <- 1
+      if (is.na(sdArea) || sdArea <= 0) {
+        # pick a tiny but positive sigma (scaled or absolute),
+        # so truncnorm stays numerically stable:
+        sdArea <- max(1, round(0.1 * meanArea, 2))
+      }
+      
+      # Use fully-qualified msm::rtnorm for truncated normal sampling
+      sub[, disturbanceSize := sprintf("msm::rtnorm(1, %g, %g, lower = 0)", meanArea, sdArea)]
     }
     return(sub)
   }))

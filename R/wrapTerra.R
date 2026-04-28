@@ -2,12 +2,19 @@ wrapTerraList <- function(terraList, generalPath, zipFiles = FALSE, uploadZip = 
   Require("stringi")
   Require("qs")
   Require("zip")
+  
+  if (!is.list(terraList)) stop("terraList must be a list")
+  if (length(terraList)==0) return(list())
+  
   listNames <- lapply(1:length(names(terraList)), function(index1){
     obj <- lapply(1:length(names(terraList[[index1]])), function(index2){
       # message(paste0("Saving ", names(terraList[[index1]][[index2]]), "\n"))
       obj2 <- terra::wrap(terraList[[index1]][[index2]])
-      fileName <- file.path(generalPath, paste0(stringi::stri_rand_strings(1, 10), 
-                                                ".qs"))
+      repeat {
+        candidate <- paste0(stringi::stri_rand_strings(1,10), ".qs")
+        fileName <- file.path(generalPath, candidate)
+        if (!file.exists(fileName)) break
+      }
       qs::qsave(obj2, fileName)
       return(fileName)
     })
@@ -34,6 +41,12 @@ wrapTerraList <- function(terraList, generalPath, zipFiles = FALSE, uploadZip = 
 }
 
 unwrapTerraList <- function(terraList, generalPath){
+  
+  if (is.list(terraList) && length(terraList) == 0) {
+    warning("No items to unwrap. Returning empty list.")
+    return(list())
+  }
+  
   updatePath <- FALSE
   if (all(!is.list(terraList),
           !file.exists(file.path(generalPath, "theList.qs")))) {
