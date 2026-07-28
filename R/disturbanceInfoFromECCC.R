@@ -17,7 +17,7 @@ disturbanceInfoFromECCC <- function(studyArea,
                                     targetFileOLD = c("EC_borealdisturbance_linear_2008_2010_FINAL_ALBERS.shp", 
                                                       "EC_borealdisturbance_polygonal_2008_2010_FINAL_ALBERS.shp"),
                                     urlOLD = paste0("https://www.ec.gc.ca/data_donnees/STB-DGST/003/Boreal-ecosystem",
-                                                    "-anthropogenic-disturbance-vector-data-2008-OLD.zip")){
+                                                    "-anthropogenic-disturbance-vector-data-2008-2010.zip")){
   
   # If the table doesn't have disturbance rate, we can calculate it based on data!
   
@@ -69,7 +69,11 @@ disturbanceInfoFromECCC <- function(studyArea,
                               destinationPath = destinationPath)
   if (!is(AD_NEW_Polys, "SpatVector"))
     AD_NEW_Polys <- terra::vect(AD_NEW_Polys)
-  
+
+  # Original ECCC file: link broke!
+  # urlOLD <- paste0("https://www.ec.gc.ca/data_donnees/STB-DGST/003/",
+                     # "Boreal-ecosystem-anthropogenic-disturbance-vector",
+                     # "-data-2008-OLD.zip")
   AD_OLD_Lines <- prepInputs(url = urlOLD,
                               archive = archiveOLD,
                               alsoExtract = "similar",
@@ -80,7 +84,6 @@ disturbanceInfoFromECCC <- function(studyArea,
                               destinationPath = destinationPath)
   if (!is(AD_OLD_Lines, "SpatVector"))
     AD_OLD_Lines <- terra::vect(AD_OLD_Lines)
-  
   AD_OLD_Polys <- prepInputs(url = urlOLD,
                               archive = archiveOLD,
                               alsoExtract = "similar",
