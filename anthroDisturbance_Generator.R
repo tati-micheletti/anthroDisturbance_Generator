@@ -212,8 +212,8 @@ defineModule(sim, list(
                       "BEADpolys2015_NWT_corrected_to_NT1_2016.shp"), NA, NA,
                     "Vector of target filenames within the newer archive to be extracted."),
     defineParameter("urlNEW", "character",
-                    paste0("https://drive.google.com/file/d/",
-                           "1sxAa0wwwt7iwiHD7zB0DDnjfqyIQjKI2"), NA, NA,
+                    paste0("https://zenodo.org/records/20765500/files/",
+                           "ECCC_2015_anthro_dist_corrected_to_NT1_2016_final.zip"), NA, NA, 
                     "URL to download the newer dataset archive."),
     defineParameter("archiveOLD", "character",
                     paste0("Boreal-ecosystem-anthropogenic-disturbance-vector-data-",
@@ -226,7 +226,7 @@ defineModule(sim, list(
     defineParameter("urlOLD", "character",
                     paste0("https://www.ec.gc.ca/data_donnees/STB-DGST/003/",
                            "Boreal-ecosystem-anthropogenic-disturbance-vector-data-",
-                           "2008-OLD.zip"), NA, NA,
+                           "2008-2010.zip"), NA, NA,
                     "URL to download the older dataset archive.")
   ),
   inputObjects = bindrows(
