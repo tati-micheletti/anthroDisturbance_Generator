@@ -81,7 +81,7 @@ jobs:
           ))
           cran_packages <- c(
             "covr", "testthat", "withr", "terra", "data.table",
-            "qs", "sf", "reproducible", "raster", "tictoc", "mockery",
+            "sf", "reproducible", "raster", "tictoc", "mockery",
             "digest", "crayon", "msm", "doParallel", "doSNOW",
             "foreach", "dplyr", "sp", "stringi", "zip", "Require",
             "fasterize", "truncnorm", "xml2", "DT", "htmltools",
@@ -134,7 +134,7 @@ jobs:
           suppressPackageStartupMessages({
             pkgs <- c(
               "covr", "DT", "htmltools", "htmlwidgets", "testthat",
-              "terra", "data.table", "qs", "sf", "withr", "reproducible",
+              "terra", "data.table", "sf", "withr", "reproducible",
               "raster", "tictoc", "mockery", "digest", "crayon", "msm",
               "doParallel", "foreach", "dplyr", "sp", "stringi", "zip",
               "Require"
