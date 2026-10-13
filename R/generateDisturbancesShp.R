@@ -1820,10 +1820,11 @@ generateDisturbancesShp <- function(disturbanceParameters,
         targetHash <- paste0(unlist(targetHash), collapse = "_")
         if (isTRUE(useRoadsPackage) || (isTRUE(maskWaterAndMountainsFromLines) && is.null(featuresToAvoid))) {
           DEMraw <- geodata::elevation_30s(country = "CAN", path = Paths[["inputPath"]])
-          DEM <- postProcessTo(from = DEMraw, to = rasterToMatch, cropTo = studyArea, 
-                               projectTo = rasterToMatch, maskTo = studyArea, 
-                               writeTo = file.path(Paths[["inputPath"]], 
-                                                   paste0("DEM_", targetHash, ".tif")))
+          fileNamePostPro <- file.path(Paths[["inputPath"]], 
+                                       paste0("DEM_", targetHash, ".tif"))
+            DEM <- postProcessTo(from = DEMraw, to = rasterToMatch, cropTo = studyArea, 
+                                 projectTo = rasterToMatch, maskTo = studyArea)#, 
+                                 # writeTo = fileNamePostPro) # Was creating error. Why?! Related to Rcpp
         }
         if (useRoadsPackage){
           # Need to create `connected`
