@@ -70,7 +70,7 @@ replaceListFast <- function(disturbanceList,
         if (all(!is.null(currDist),
                 !"createdInSimulationTime" %in% names(currDist),
                 is(currDist, "SpatVector"))) {
-          currDist[["createdInSimulationTime"]] <- currentTime
+          currDist[["createdInSimulationTime"]] <- rep(currentTime, nrow(currDist)) # rep(): terra errors on 0-row SpatVector with a scalar
         }
         # The only problem is then the ones that are enlarging. We need to pass the table here too to detect
         # which ones need to just be replaced. In the current version of the module, this is the case of
@@ -113,7 +113,7 @@ replaceListFast <- function(disturbanceList,
         if (all(!is.null(pastDist),
                 !"createdInSimulationTime" %in% names(pastDist),
                 is(pastDist, "SpatVector"))) {
-          pastDist[["createdInSimulationTime"]] <- currentTime - 10
+          pastDist[["createdInSimulationTime"]] <- rep(currentTime - 10, nrow(pastDist))
         }
         classPast <- class(pastDist)
         classCurr <- class(currDist)
@@ -129,13 +129,13 @@ replaceListFast <- function(disturbanceList,
               pastDist <- as.polygons(pastDist)
               # preserve time stamp if missing
               if (!"createdInSimulationTime" %in% names(pastDist)) {
-                pastDist[["createdInSimulationTime"]] <- currentTime - 10
+                pastDist[["createdInSimulationTime"]] <- rep(currentTime - 10, nrow(pastDist))
               }
             }
             if (classCurr %in% c("RasterLayer", "SpatRaster")) {
               currDist <- as.polygons(currDist)
               if (!"createdInSimulationTime" %in% names(currDist)) {
-                currDist[["createdInSimulationTime"]] <- currentTime
+                currDist[["createdInSimulationTime"]] <- rep(currentTime, nrow(currDist)) # rep(): terra errors on 0-row SpatVector with a scalar
               }
             }
             wid <- 0.0000000003
