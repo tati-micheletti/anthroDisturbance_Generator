@@ -27,7 +27,7 @@ env:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # the package snapshot below is for Ubuntu 24.04 (noble)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,6 +62,7 @@ jobs:
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
         with:
+          r-version: '4.5.2'   # matches the 2026-01-05 package snapshot (binaries are built per R version)
           use-public-rspm: true
 
       - name: Pre-install Require (vanilla)
@@ -98,6 +99,23 @@ jobs:
           gdal-config --datadir
           projinfo EPSG:32633 | head
           echo "PROJ_LIB=$PROJ_LIB"
+
+      - name: Install pinned SpaDES development packages
+        env:
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Rscript --vanilla - <<'RS'
+          options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/2026-01-05"))
+          if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
+          # exact commits used for the manuscript runs; dependencies come from the CRAN snapshot above
+          pins <- c(Require = "e41bb255c1e4e5b7514eca0c125e9c376d794375",
+                    reproducible = "5bd027ca715e0663f0829d2c26ba92c1b59f8929",
+                    SpaDES.core = "2917207e4ed424249d13aaa92d3f20727b2e347d")
+          for (p in names(pins)) {
+            remotes::install_github(paste0("PredictiveEcology/", p), ref = pins[[p]],
+                                    dependencies = FALSE, upgrade = "never", force = TRUE)
+          }
+          RS
 
       - name: Ensure Require present
         run: |
