@@ -33,12 +33,21 @@ createBufferedDisturbances <- function(disturbanceList,
         return(NULL)
       }
       lay[lay != 1] <- NA
+      if (!any(terra::values(lay) == 1, na.rm = TRUE)) { # no cell coded 1: nothing to polygonize
+        message(paste0("Layer ", INDEX, " has no cells coded 1. Returning NULL."))
+        return(NULL)
+      }
       lay <- terra::as.polygons(lay, values = TRUE, na.rm = TRUE, digits = 5)
       lay <- terra::subset(x = lay, subset = lay[[names(lay)]] == 1)
     }
     
     message(paste0("Buffering vector ", INDEX))
     bLay <- terra::buffer(lay, width = bufferSize)
+    # early-out for empties: terra::aggregate() errors on a 0-row SpatVector
+    if (nrow(bLay) == 0) {
+      message(paste0("The layer for ", INDEX, " is empty. Returning NULL"))
+      return(NULL)
+    }
     bLay <- terra::aggregate(bLay, dissolve = TRUE)
     
     # early-outs for empties

@@ -246,7 +246,7 @@ generateDisturbances <- function(disturbanceParameters,
           }
         }
         if (nrow(polySF) > 0L) {
-          polySF$Polys <- 1
+          polySF$Polys <- rep(1, nrow(polySF)) # rep(): a scalar cannot be assigned to a 0-row sf
           polysField <- "Polys"
           message("Rasterizing disturbances...")
           rasterToMatchR <- rasterToMatchR
@@ -484,7 +484,7 @@ generateDisturbances <- function(disturbanceParameters,
         # If NA, it doesn't matter, but need to create a 
         # field so not the whole thing becomes one big 1 map
         
-        potLaySF$Potential <- 1
+        potLaySF$Potential <- rep(1, nrow(potLaySF))
         potField <- "Potential"
         message(crayon::yellow(paste0("Potential field not declared for ", ORIGIN, " (",
                                       Sector, "). Considering all polygons as likely to develop ",
