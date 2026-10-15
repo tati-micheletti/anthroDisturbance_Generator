@@ -43,6 +43,10 @@ defineModule(sim, list(
                     "This describes the simulation time interval between save events."),
     defineParameter(".seed", "list", list(), NA, NA,
                     "Named list of seeds to use for each event (names)."),
+    defineParameter(".baseSeed", "numeric", NA, NA, NA,
+                    paste0("If not NA, the random number generator is re-seeded at the start of every event ",
+                           "with .baseSeed * 1000 + the current simulation year. This makes a run exactly ",
+                           "reproducible, independently of caching or of what was computed earlier.")),
     defineParameter(".useCache", "logical", FALSE, NA, NA,
                     "Should caching of events or module be used?"),
     defineParameter("runInterval", "numeric", 10, NA, NA,
@@ -433,6 +437,8 @@ defineModule(sim, list(
 #   - type `init` is required for initialization
 
 doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
+  # Reproducible randomness: seed from the base seed and the simulation year (see parameter .baseSeed)
+  if (!is.na(P(sim)$.baseSeed)) set.seed(as.integer(P(sim)$.baseSeed * 1000 + time(sim)))
   switch(
     eventType,
     init = {
