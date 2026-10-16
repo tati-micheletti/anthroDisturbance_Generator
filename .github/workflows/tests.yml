@@ -109,8 +109,8 @@ jobs:
           if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
           # exact commits used for the manuscript runs; dependencies come from the CRAN snapshot above
           pins <- c(Require = "e41bb255c1e4e5b7514eca0c125e9c376d794375",
-                    reproducible = "5bd027ca715e0663f0829d2c26ba92c1b59f8929",
-                    SpaDES.core = "2917207e4ed424249d13aaa92d3f20727b2e347d")
+                    reproducible = "8d52c58249b3d2f348ef1cdd121d808e50f3db59",
+                    SpaDES.core = "abcea6ff234e75a05ec6228a697d9e357da2449c")
           for (p in names(pins)) {
             remotes::install_github(paste0("PredictiveEcology/", p), ref = pins[[p]],
                                     dependencies = FALSE, upgrade = "never", force = TRUE)
