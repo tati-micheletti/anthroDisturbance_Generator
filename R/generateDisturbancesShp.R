@@ -27,8 +27,6 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                     useClusterMethod,
                                     refinedStructure){
 
-  if (maskWaterAndMountainsFromLines)(Require("spaths"))
-  if (useRoadsPackage)(Require("geodata"))
   
   # Extracting layers from previous ones
   # Total study area

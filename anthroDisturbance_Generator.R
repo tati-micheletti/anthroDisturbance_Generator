@@ -29,7 +29,8 @@ defineModule(sim, list(
                   "data.table", "reproducible", "geodata",
                   "terra", "crayon", "msm", "sf",
                   "tictoc", "roads", "truncnorm",
-                  "foreach", "doParallel", "digest", "ggplot2"),
+                  "foreach", "doParallel", "digest", "ggplot2",
+                  "SpaDES.tools", "spaths"),
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),

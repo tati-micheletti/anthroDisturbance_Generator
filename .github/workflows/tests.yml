@@ -85,6 +85,7 @@ jobs:
             "sf", "reproducible", "raster", "tictoc", "mockery",
             "digest", "crayon", "msm", "doParallel", "doSNOW",
             "foreach", "dplyr", "sp", "stringi", "zip", "Require",
+            "SpaDES.tools", "spaths",
             "truncnorm", "xml2", "DT", "htmltools",
             "htmlwidgets", "BH", "RApiSerialize", "Rcpp",
             "RcppParallel", "stringfish", "SpaDES.core"
