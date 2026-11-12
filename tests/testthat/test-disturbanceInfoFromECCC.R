@@ -506,3 +506,33 @@ test_that("adds zero rows for classes missing on either side", {
   expect_equal(changed[Class == "Cutblock"]$yearNEW, 0)  # Cutblock added to NEW as 0
 })
 
+
+## ---- Written tables are returned, so the module can list them in outputs(sim)
+
+test_that("returns the paths of the two tables it writes", {
+  totalstudyAreaVAreaSqKm <- expanse(studyArea) / 1e6
+  layers <- list(NEW_Lines = fake_NEW_Lines, NEW_Polys = fake_NEW_Polys,
+                 OLD_Lines = fake_OLD_Lines, OLD_Polys = fake_OLD_Polys)
+  stub(disturbanceInfoFromECCC, 'prepInputs', stub_prepInputs_for(layers))
+  outDir <- withr::local_tempdir()
+
+  res <- suppressWarnings(
+    disturbanceInfoFromECCC(
+      studyArea = studyArea,
+      RTM = RTM,
+      totalstudyAreaVAreaSqKm = totalstudyAreaVAreaSqKm,
+      classesAvailable = classesAvailable,
+      disturbanceList = disturbanceList,
+      diffYears = '2010_2020',
+      destinationPath = outDir,
+      bufferedDisturbances = FALSE,
+      maskOutLinesFromPolys = TRUE,
+      aggregateSameDisturbances = TRUE
+    )
+  )
+
+  expect_setequal(sub("_[^_]+[.]csv$", "", basename(res$files)),
+                  c("anthropogenicDisturbance_ECCC_2010_2020", "proportionTable_ECCC_2010_2020"))
+  expect_true(all(dirname(res$files) == outDir))
+  expect_true(all(file.exists(res$files)))
+})

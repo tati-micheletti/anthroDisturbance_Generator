@@ -5,14 +5,15 @@ saveDisturbances <- function(disturbanceList,
   # Characters that are not allowed in Windows file names are replaced by "_"
   safeFileName <- function(x) gsub("[<>:\"/\\\\|?*]", "_", x)
   
-  # Helper to write one spatial object
+  written <- character(0) # files written, returned so the module can register them as outputs
+  # Helper to write one spatial object; returns the path written (character(0) if skipped)
   write_one <- function(obj, sector, layer = NULL) {
     # decide extension and write func
     if (is.null(obj)) {
       warning(sprintf("The layer for %s%s is NULL. Not saving.", sector,
                       if (!is.null(layer)) paste0(" -- ", layer) else ""),
               immediate. = TRUE)
-      return()
+      return(character(0))
     }
     # Coerce and write vector
     if (any(class(obj) %in% c("SpatVector", "sf")) || is(obj, "Spatial")) {
@@ -27,6 +28,7 @@ saveDisturbances <- function(disturbanceList,
         terra::writeVector(obj, out_path, filetype = "ESRI Shapefile", overwrite = overwrite),
         error = function(e) stop(sprintf("writeVector failed for %s (%s): %s", out_path, class(obj)[1], conditionMessage(e)))
       )
+      out_path
     }
     # Raster branch
     else if (any(class(obj) %in% c("RasterLayer", "SpatRaster"))) {
@@ -48,6 +50,7 @@ saveDisturbances <- function(disturbanceList,
         terra::writeRaster(obj, out_path, filetype = "GTiff", overwrite = overwrite),
         error = function(e) stop(sprintf("writeRaster failed for %s (%s, %d layers): %s", out_path, class(obj)[1], lyr_count, conditionMessage(e)))
       )
+      out_path
     } else {
       stop(sprintf("Objects of class %s can't be used. Please use raster, sp, sf, or terra formats.",
                    paste(class(obj), collapse=",")))
@@ -60,7 +63,7 @@ saveDisturbances <- function(disturbanceList,
     if (any(class(obj) %in% c("SpatVector", "sf", "RasterLayer", "SpatRaster")) ||
         is(obj, "Spatial")) {
       message(sprintf("Layer: %s was likely not generated. Saving current disturbance.", sector))
-      write_one(obj, sector)
+      written <- c(written, write_one(obj, sector))
     } else if (is.list(obj)) {
       # multi-layer
       layers <- setdiff(names(obj), grep("potential", names(obj), value=TRUE))
@@ -72,9 +75,10 @@ saveDisturbances <- function(disturbanceList,
           if (!"Class" %in% names(layer_obj) || all(is.na(layer_obj$Class)))
             layer_obj$Class <- lay
         }
-        write_one(layer_obj, sector, lay)
+        written <- c(written, write_one(layer_obj, sector, lay))
       }
     }
   }
   message(crayon::green(sprintf("All disturbances saved for %s", currentTime)))
+  invisible(written)
 }

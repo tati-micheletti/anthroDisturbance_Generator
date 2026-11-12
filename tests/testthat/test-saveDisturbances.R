@@ -237,3 +237,31 @@ test_that("unusual names with spaces and punctuation are saved", {
   files <- list.files(output_dir)
   expect_true(any(grepl("disturbances_sec tor!_T8_run_Special_", files, fixed = TRUE)))
 })
+
+# Paths of the files written, so the module can list them in outputs(sim)
+
+test_that("returns the paths of the files it wrote", {
+  pts <- vect(sf::st_as_sf(data.frame(x = 1:2, y = 3:4), coords = c("x", "y")))
+  sr <- rast(nrows = 2, ncols = 2)
+  values(sr) <- 1
+  disturbances <- list(sectorI = pts,
+                       sectorJ = list(potentialLayer = pts, actual = pts, rastL = sr, empty = NULL))
+  written <- suppressWarnings(saveDisturbances(disturbances,
+                                               currentTime = "T7",
+                                               overwrite = TRUE,
+                                               runName = "runPaths"))
+  expect_type(written, "character")
+  expect_setequal(basename(written),
+                  c("disturbances_sectorI_T7_runPaths.shp",
+                    "disturbances_sectorJ_actual_T7_runPaths.shp",
+                    "disturbances_sectorJ_rastL_T7_runPaths.tif"))
+  expect_true(all(file.exists(written)))
+})
+
+test_that("returns character(0) when nothing is written", {
+  written <- suppressWarnings(saveDisturbances(list(sectorK = list(layer1 = NULL)),
+                                               currentTime = "T8",
+                                               overwrite = TRUE,
+                                               runName = "runNone"))
+  expect_identical(written, character(0))
+})

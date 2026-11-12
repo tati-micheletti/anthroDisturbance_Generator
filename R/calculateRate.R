@@ -23,6 +23,13 @@ calculateRate <- function(disturbanceParameters,
     message("calculateRate: no rows need updating, returning original table.")
     return(disturbanceParameters)
   }
+  # ECCC tables written on this run (not those read back from destinationPath), returned as the
+  # attribute "files" of the table so the module can list them in outputs(sim)
+  writtenFiles <- character(0)
+  withFiles <- function(x) {
+    if (length(writtenFiles)) data.table::setattr(x, "files", unique(writtenFiles))
+    x
+  }
   
   isEmptyInput <- function(x) {
     if (is.null(x)) return(TRUE)
@@ -91,6 +98,7 @@ calculateRate <- function(disturbanceParameters,
       )
       
       AD_changed <- distECCC[["AD_changed"]]
+      writtenFiles <- c(writtenFiles, distECCC[["files"]])
     } else {
       AD_changed <- data.table::fread(AD_changed_file)
     }
@@ -98,7 +106,7 @@ calculateRate <- function(disturbanceParameters,
       warning("No historical ECCC disturbance for these classes → setting rate to zero")
       # set disturbanceRate = 0 for all rows we intended to update
       disturbanceParameters[whichToUpdate, disturbanceRate := 0]
-      return(disturbanceParameters)
+      return(withFiles(disturbanceParameters))
     }
     
     toFill <- AD_changed[Class %in% toLookFor[["classToSearch"]]]
@@ -179,6 +187,7 @@ calculateRate <- function(disturbanceParameters,
                   targetFileOLD                 = targetFileOLD,
                   urlOLD                        = urlOLD
                 )
+                writtenFiles <<- c(writtenFiles, distECCC[["files"]])
               }
               proportionTable <- distECCC[["proportionTable"]]
             } else {
@@ -266,5 +275,5 @@ calculateRate <- function(disturbanceParameters,
     message(paste0("Total expected yearly rate of new human disturbance (excluding roads and not simulated features): ", 
                    round(sum(disturbanceParametersUp[["disturbanceRate"]], na.rm = TRUE), 4), "% of total area (",
                    round(totalstudyAreaVAreaSqKm, 1), " km2)."))
-    return(disturbanceParametersUp)
+    return(withFiles(disturbanceParametersUp))
 }

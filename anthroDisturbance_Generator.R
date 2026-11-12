@@ -25,7 +25,7 @@ defineModule(sim, list(
   timeunit = "year",
   citation = list("citation.bib"),
   documentation = list("README.md", "anthroDisturbance_Generator.Rmd"), ## same file
-  reqdPkgs = list("SpaDES.core", "googledrive",
+  reqdPkgs = list("SpaDES.core (>= 2.0.0)", "googledrive",
                   "data.table", "reproducible", "geodata",
                   "terra", "crayon", "msm", "sf",
                   "tictoc", "roads", "truncnorm",
@@ -579,6 +579,13 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                    targetFileOLD = P(sim)$targetFileOLD,
                                                    urlOLD = P(sim)$urlOLD
         )
+        # list the ECCC tables in outputs(sim) on the run that writes them; when they were read
+        # back from inputPath they are inputs, and calculateRate() returns no "files"
+        ecccFiles <- attr(sim$disturbanceParameters, "files")
+        if (length(ecccFiles)) {
+          data.table::setattr(sim$disturbanceParameters, "files", NULL)
+          sim <- registerOutputs(ecccFiles, sim)
+        }
       }
       if (isTRUE(P(sim)$verboseDiagnostics)) {
         # emit a concise diagnostics report after rates are determined
@@ -594,10 +601,12 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
               start(sim) == time(sim))){
         message(crayon::yellow(paste0("The parameter saveInitialDisturbances is TRUE.",
                                       " Saving initial disturbance layers")))
-        saveDisturbances(disturbanceList = sim$disturbanceList,
-                         currentTime = "IC", 
-                         overwrite = TRUE,
-                         runName = P(sim)$.runName)
+        savedFiles <- saveDisturbances(disturbanceList = sim$disturbanceList,
+                                       currentTime = "IC", 
+                                       overwrite = TRUE,
+                                       runName = P(sim)$.runName)
+        # list the saved files in outputs(sim)
+        if (length(savedFiles)) sim <- registerOutputs(savedFiles, sim)
         
         initialBufferedAnthropogenicDisturbance500m <- createBufferedDisturbances(disturbanceList = sim$disturbanceList,
                                                                                   bufferSize = 500,
@@ -626,6 +635,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                            anthroDistFilePath,
                                            conditionMessage(e)))
         )
+        sim <- registerOutputs(anthroDistFilePath, sim)
       }
       
       # Check if the time(sim) is within the interval to run the disturbances
@@ -782,9 +792,11 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
         
         if (P(sim)$saveCurrentDisturbances) {
           message(paste0("Saving current disturbances for year ", time(sim)))
-          saveDisturbances(disturbanceList = sim$disturbanceList,
-                           currentTime = time(sim), overwrite = TRUE,
-                           runName = P(sim)$.runName)
+          savedFiles <- saveDisturbances(disturbanceList = sim$disturbanceList,
+                                         currentTime = time(sim), overwrite = TRUE,
+                                         runName = P(sim)$.runName)
+          # list the saved files in outputs(sim)
+          if (length(savedFiles)) sim <- registerOutputs(savedFiles, sim)
         }
       }
       sim <- scheduleEvent(sim, time(sim) + P(sim)$runInterval, "anthroDisturbance_Generator", "updatingDisturbanceList")

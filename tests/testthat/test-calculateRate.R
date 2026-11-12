@@ -1257,3 +1257,85 @@ test_that("ECCC: per-class missing row -> WARNING + sets only that row to 0 (doc
 # Further tests for totalDisturbanceRate and empirical ECCC fallback would require mocking
 # disturbanceInfoFromECCC() or pre-populating the cache files.
 # These are left as integration tests rather than pure unit tests.
+
+# ECCC tables written on a run are returned as attribute "files"; tables read from the cache are not
+
+# stand-in for disturbanceInfoFromECCC(): writes both tables to destinationPath, as the real one does
+fake_eccc_writer <- function(studyArea, destinationPath, diffYears, ...) {
+  AD_changed <- data.table(Class = "C1", yearOLD = 0, yearNEW = 5)
+  proportionTable <- data.table(dataClass = "orig1", proportionOfTotalDisturbance = 0.5)
+  files <- file.path(destinationPath,
+                     paste0(c("anthropogenicDisturbance_ECCC_", "proportionTable_ECCC_"),
+                            diffYears, "_", digest::digest(studyArea), ".csv"))
+  write.csv(AD_changed, files[1], row.names = FALSE)
+  write.csv(proportionTable, files[2], row.names = FALSE)
+  list(AD_changed = AD_changed, proportionTable = proportionTable, files = files)
+}
+
+calc_with <- function(fn, destinationPath, studyArea, totalDisturbanceRate = NULL) {
+  fn(
+    disturbanceParameters             = params_template(),
+    disturbanceDT                     = disturbanceDT,
+    disturbanceList                   = list(dn1 = list(orig1 = dummy_layer)),
+    whichToUpdate                     = 1L,
+    RTM                               = rast_template(),
+    studyArea                         = studyArea,
+    destinationPath                   = destinationPath,
+    DisturbanceRate                   = NULL,
+    totalDisturbanceRate              = totalDisturbanceRate,
+    disturbanceRateRelatesToBufferedArea = FALSE,
+    maskOutLinesFromPolys               = FALSE,
+    aggregateSameDisturbances           = FALSE,
+    archiveNEW                          = NULL,
+    targetFileNEW                       = NULL,
+    urlNEW                              = NULL,
+    archiveOLD                          = NULL,
+    targetFileOLD                       = NULL,
+    urlOLD                              = NULL
+  )
+}
+
+test_that("returns the ECCC tables it writes as attribute 'files'", {
+  mockery::stub(calculateRate, "disturbanceInfoFromECCC", fake_eccc_writer)
+  destDir <- withr::local_tempdir()
+  result <- suppressMessages(calc_with(calculateRate, destDir, create_study_area()))
+  written <- list.files(destDir, pattern = "_ECCC_.*[.]csv$", full.names = TRUE)
+  expect_length(written, 2)
+  expect_setequal(attr(result, "files"), written)
+})
+
+test_that("tables written for totalDisturbanceRate are returned as attribute 'files' too", {
+  destDir <- withr::local_tempdir()
+  sa <- create_study_area()
+  # the cache key is a digest of the study area as calculateRate() sees it, so fill the cache
+  # through calculateRate() itself, then drop the proportion table
+  writing <- calculateRate
+  mockery::stub(writing, "disturbanceInfoFromECCC", fake_eccc_writer)
+  suppressMessages(calc_with(writing, destDir, sa))
+  unlink(list.files(destDir, pattern = "^proportionTable_ECCC_", full.names = TRUE))
+  # the change table is now read from the cache; the tables are written again for the proportions
+  seen <- new.env()
+  rewriting <- calculateRate
+  mockery::stub(rewriting, "disturbanceInfoFromECCC", function(studyArea, destinationPath, diffYears, ...) {
+    seen$changeTableCached <- length(list.files(destinationPath, pattern = "^anthropogenicDisturbance_ECCC_")) > 0
+    fake_eccc_writer(studyArea, destinationPath, diffYears, ...)
+  })
+  result <- suppressWarnings(suppressMessages(calc_with(rewriting, destDir, sa, totalDisturbanceRate = 10)))
+  expect_true(seen$changeTableCached)
+  expect_setequal(attr(result, "files"), list.files(destDir, pattern = "_ECCC_.*[.]csv$", full.names = TRUE))
+})
+
+test_that("returns no files when the ECCC tables are read from the cache", {
+  destDir <- withr::local_tempdir()
+  sa <- create_study_area()
+  writing <- calculateRate
+  mockery::stub(writing, "disturbanceInfoFromECCC", fake_eccc_writer)
+  suppressWarnings(suppressMessages(calc_with(writing, destDir, sa, totalDisturbanceRate = 10)))
+  expect_length(list.files(destDir, pattern = "_ECCC_.*[.]csv$"), 2)
+  reading <- calculateRate
+  mockery::stub(reading, "disturbanceInfoFromECCC",
+                function(...) stop("the cached tables should have been used"))
+  result <- suppressWarnings(suppressMessages(calc_with(reading, destDir, sa, totalDisturbanceRate = 10)))
+  expect_null(attr(result, "files"))
+  expect_equal(result$disturbanceRate, 10 * 0.5, tolerance = 1e-8)
+})

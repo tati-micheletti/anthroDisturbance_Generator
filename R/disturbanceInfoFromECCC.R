@@ -359,10 +359,14 @@ disturbanceInfoFromECCC <- function(studyArea,
                           proportionAreaSqKmChangedPerYear / ttDisturbanceRate]
       }
     }
-    write.csv(x = AD_changed, file.path(destinationPath, 
-                                        paste0("anthropogenicDisturbance_ECCC_", diffYears,"_", digest(studyArea),".csv")))
-    write.csv(x = proportionTable, file.path(destinationPath, 
-                                             paste0("proportionTable_ECCC_", diffYears,"_", digest(studyArea),".csv")))
+    adFile <- file.path(destinationPath,
+                        paste0("anthropogenicDisturbance_ECCC_", diffYears,"_", digest(studyArea),".csv"))
+    propFile <- file.path(destinationPath,
+                          paste0("proportionTable_ECCC_", diffYears,"_", digest(studyArea),".csv"))
+    write.csv(x = AD_changed, adFile)
+    write.csv(x = proportionTable, propFile)
+    # files: the tables written, so the module can list them in outputs(sim)
     return(list(AD_changed = AD_changed,
-                proportionTable = proportionTable))
+                proportionTable = proportionTable,
+                files = c(adFile, propFile)))
 }

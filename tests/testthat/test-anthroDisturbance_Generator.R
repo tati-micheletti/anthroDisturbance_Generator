@@ -563,3 +563,163 @@ test_that("Generation happens only on scheduled years (disturbanceInterval)", {
   expect_setequal(obs_forestry_years,    exp_forestry_years)
   expect_setequal(obs_settle_years,      exp_settlements_years)
 })
+
+test_that("Saved disturbance layers are listed in outputs(sim)", {
+  testthat::skip_if_not_installed("SpaDES.core")
+  testthat::skip_if_not_installed("SpaDES.tools")
+  testthat::skip_if_not_installed("fasterize")
+  testthat::skip_if_not_installed("raster")
+
+  withr::local_options(
+    spades.useRequire       = FALSE,
+    spades.moduleCodeChecks = FALSE,
+    Require.install         = FALSE,
+    Require.unload          = FALSE
+  )
+
+  # same set-up as the primary vector-mode test, with both save parameters on
+  distList_full <- createDisturbanceList(crs(r))
+  dp_full <- createDisturbanceParameters(distList_full)
+  dp <- data.table::copy(dp_full[dataName %in% c("settlements", "forestry")])
+  dp[dataName == "forestry" & disturbanceType == "Generating",
+     disturbanceSize := "max(stats::rnorm(1, mean = 20000, sd = 3000), 1)"]
+  disturbanceList <- list(
+    settlements = distList_full$settlements[c("settlements", "potentialSettlements")],
+    forestry    = distList_full$forestry[c("cutblocks", "potentialCutblocks")]
+  )
+  outDir <- withr::local_tempdir()
+
+  sim <- suppressWarnings(SpaDES.core::simInit(
+    times   = list(start = 2000, end = 2001),
+    params  = list(anthroDisturbance_Generator = list(
+      generatedDisturbanceAsRaster         = FALSE,
+      saveInitialDisturbances              = TRUE,
+      saveCurrentDisturbances              = TRUE,
+      runInterval                          = 1,
+      growthStepEnlargingPolys             = 5,
+      growthStepEnlargingLines             = 5,
+      growthStepGenerating                 = 1,
+      disturbanceRateRelatesToBufferedArea = FALSE,
+      seismicLineGrids                     = 1,
+      useClusterMethod                     = FALSE,
+      runClusteringInParallel              = FALSE,
+      useRoadsPackage                      = FALSE,
+      maskWaterAndMountainsFromLines       = FALSE,
+      siteSelectionAsDistributing          = NA_character_,
+      connectingBlockSize                  = 50L,
+      altitudeCut                          = Inf,
+      clusterDistance                      = 10,
+      distanceNewLinesFactor               = 1,
+      refinedStructure                     = FALSE,
+      disturbFirstYear                     = FALSE,
+      .seed = list(anthroDisturbance_Generator = list(
+        calculatingSize = 31L, calculatingRate = 32L, generatingDisturbances = 33L, updatingDisturbanceList = 34L
+      ))
+    )),
+    modules = "anthroDisturbance_Generator",
+    paths   = list(modulePath = find_modulePath(), inputPath = tempdir(), outputPath = outDir),
+    objects = list(
+      studyArea             = sa,
+      rasterToMatch         = r,
+      DEM                   = r,
+      rstCurrentBurn        = { x <- r; terra::values(x) <- 0; x },
+      disturbanceList       = disturbanceList,
+      disturbanceParameters = dp,
+      disturbanceDT         = data.table::data.table(dataName = "forestry", dataClass = "potentialCutblocks")
+    ),
+    loadPkgs = FALSE
+  ))
+  simOut <- suppressWarnings(SpaDES.core::spades(sim))
+
+  written <- list.files(outDir, pattern = "^(disturbances_|bufferedAnthDist_).*[.](shp|tif)$",
+                        full.names = TRUE)
+  registered <- SpaDES.core::outputs(simOut)$file
+  expect_true(any(grepl("_IC_", basename(written))))     # initial layers were saved
+  expect_true(any(grepl("_2001_", basename(written))))   # and those of the simulated year
+  expect_true(any(grepl("^bufferedAnthDist_", basename(written))))
+  expect_setequal(normalizePath(registered), normalizePath(written))
+})
+
+test_that("ECCC rate tables are listed in outputs(sim) only on the run that writes them", {
+  testthat::skip_if_not_installed("SpaDES.core")
+  testthat::skip_if_not_installed("SpaDES.tools")
+  testthat::skip_if_not_installed("fasterize")
+  testthat::skip_if_not_installed("raster")
+
+  withr::local_options(
+    spades.useRequire       = FALSE,
+    spades.moduleCodeChecks = FALSE,
+    Require.install         = FALSE,
+    Require.unload          = FALSE
+  )
+
+  # forestry has no rate, so calculatingRate derives it from the ECCC tables
+  distList_full <- createDisturbanceList(crs(r))
+  dp_full <- createDisturbanceParameters(distList_full)
+  dp <- data.table::copy(dp_full[dataName %in% c("settlements", "forestry")])
+  dp[dataName == "forestry" & disturbanceType == "Generating", disturbanceRate := NA_real_]
+  disturbanceList <- list(
+    settlements = distList_full$settlements[c("settlements", "potentialSettlements")],
+    forestry    = distList_full$forestry[c("cutblocks", "potentialCutblocks")]
+  )
+  inDir <- withr::local_tempdir()
+  outDir <- withr::local_tempdir()
+
+  # the ECCC cache key is digest(studyArea), and the digest of a SpatVector depends on which terra
+  # methods were used earlier in the R session; use a fixed key so the second run finds the cache
+  cacheKey <- "testStudyArea"
+  # stand-in for the ECCC download: writes the two tables to inputPath, as the real function does
+  fakeECCC <- function(studyArea, destinationPath, diffYears, ...) {
+    AD_changed <- data.table::data.table(Class = "Cutblock", yearOLD = 0, yearNEW = 0.01)
+    proportionTable <- data.table::data.table(dataClass = "cutblocks", proportionOfTotalDisturbance = 1)
+    files <- file.path(destinationPath,
+                       paste0(c("anthropogenicDisturbance_ECCC_", "proportionTable_ECCC_"),
+                              diffYears, "_", cacheKey, ".csv"))
+    utils::write.csv(AD_changed, files[1], row.names = FALSE)
+    utils::write.csv(proportionTable, files[2], row.names = FALSE)
+    list(AD_changed = AD_changed, proportionTable = proportionTable, files = files)
+  }
+
+  runOnce <- function() {
+    sim <- suppressWarnings(SpaDES.core::simInit(
+      times   = list(start = 2000, end = 2000),
+      params  = list(anthroDisturbance_Generator = list(
+        generatedDisturbanceAsRaster   = FALSE,
+        saveInitialDisturbances        = FALSE, # only the ECCC tables are outputs here
+        saveCurrentDisturbances        = FALSE,
+        useRoadsPackage                = FALSE,
+        maskWaterAndMountainsFromLines = FALSE,
+        siteSelectionAsDistributing    = NA_character_,
+        disturbFirstYear               = FALSE
+      )),
+      modules = "anthroDisturbance_Generator",
+      paths   = list(modulePath = find_modulePath(), inputPath = inDir, outputPath = outDir),
+      objects = list(
+        studyArea             = sa,
+        rasterToMatch         = r,
+        DEM                   = r,
+        rstCurrentBurn        = { x <- r; terra::values(x) <- 0; x },
+        disturbanceList       = disturbanceList,
+        disturbanceParameters = dp,
+        disturbanceDT         = data.table::data.table(dataName = "forestry", dataClass = "cutblocks",
+                                                       fieldToSearch = "Class", classToSearch = "Cutblock")
+      ),
+      loadPkgs = FALSE
+    ))
+    assign("disturbanceInfoFromECCC", fakeECCC, envir = sim$.mods$anthroDisturbance_Generator)
+    assign("digest", function(...) cacheKey, envir = sim$.mods$anthroDisturbance_Generator)
+    suppressWarnings(SpaDES.core::spades(sim))
+  }
+
+  # first run writes the tables: they are outputs
+  s1 <- runOnce()
+  ecccFiles <- list.files(inDir, pattern = "_ECCC_.*[.]csv$", full.names = TRUE)
+  expect_length(ecccFiles, 2)
+  expect_setequal(normalizePath(SpaDES.core::outputs(s1)$file), normalizePath(ecccFiles))
+  expect_true(is.finite(s1$disturbanceParameters[dataName == "forestry" & disturbanceType == "Generating",
+                                                 disturbanceRate]))
+
+  # second run reads them back from inputPath: there they are inputs, not outputs
+  s2 <- runOnce()
+  expect_length(SpaDES.core::outputs(s2)$file, 0)
+})
