@@ -1,6 +1,23 @@
 
 module_name <- "anthroDisturbance_Generator"
 
+# The search path as this file found it; the last test checks the file leaves it unchanged
+search_at_start <- search()
+
+# Detach, when the calling test ends, every package attached while it ran. simInit() attaches the
+# module's reqdPkgs (and the first test attaches reproducible and SpaDES.tools); left attached, they
+# would change what the test files that run after this one see.
+local_restore_search_path <- function(envir = parent.frame()) {
+  before <- search()
+  withr::defer({
+    for (p in setdiff(search(), before)) {
+      if (startsWith(p, "package:")) {
+        suppressWarnings(try(detach(p, character.only = TRUE), silent = TRUE))
+      }
+    }
+  }, envir = envir)
+}
+
 find_modulePath <- function(mod = module_name) {
   # Start from the test dir and walk up to the module root
   module_root <- normalizePath(file.path(testthat::test_path(), "..", ".."), mustWork = TRUE)
@@ -131,6 +148,7 @@ plot_disturbance_diagnostics <- function(distList, sa, r, rstCurrentBurn,
 
 
 testthat::test_that("Primary sim runs one year and updates outputs (vector mode)", {
+  local_restore_search_path() # detach what simInit() attaches
   testthat::skip_if_not_installed("SpaDES.core")
   testthat::skip_if_not_installed("SpaDES.tools")
   testthat::skip_if_not_installed("reproducible")
@@ -266,6 +284,7 @@ testthat::test_that("Primary sim runs one year and updates outputs (vector mode)
 })
 
 test_that("Disturbance layers carry forward across years (hand-off)", {
+  local_restore_search_path() # detach what simInit() attaches
   skip_on_ci()
   
   distList <- createDisturbanceList()
@@ -316,6 +335,7 @@ test_that("Disturbance layers carry forward across years (hand-off)", {
 })
 
 test_that("Identical seeds yield identical outputs", {
+  local_restore_search_path() # detach what simInit() attaches
   skip_on_ci()
   
   distList <- createDisturbanceList()
@@ -364,6 +384,7 @@ test_that("Identical seeds yield identical outputs", {
 })
 
 test_that("Yearly event order and execution follow module design", {
+  local_restore_search_path() # detach what simInit() attaches
   skip_on_ci()
   
   # Minimal disturbanceList + parameters (see your templates)
@@ -469,6 +490,7 @@ test_that("Yearly event order and execution follow module design", {
 })
 
 test_that("Generation happens only on scheduled years (disturbanceInterval)", {
+  local_restore_search_path() # detach what simInit() attaches
   skip_on_ci()
   
   distList <- createDisturbanceList()
@@ -562,4 +584,8 @@ test_that("Generation happens only on scheduled years (disturbanceInterval)", {
   
   expect_setequal(obs_forestry_years,    exp_forestry_years)
   expect_setequal(obs_settle_years,      exp_settlements_years)
+})
+
+testthat::test_that("running the module leaves the search path as it found it", {
+  testthat::expect_identical(search(), search_at_start)
 })
