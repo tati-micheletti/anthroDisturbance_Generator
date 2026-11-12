@@ -8,7 +8,8 @@ createCropLayFinalYear1 <- function(Lay,
                                     potLayTopValid, 
                                     runClusteringInParallel, 
                                     clusterDistance, 
-                                    studyAreaHash) {
+                                    studyAreaHash,
+                                    maxClusterCores = NA) {
   # 0) input validation
   if (!is.numeric(clusterDistance) || length(clusterDistance) != 1) {
     stop("`clusterDistance` must be a single numeric value")
@@ -179,8 +180,10 @@ createCropLayFinalYear1 <- function(Lay,
           distThreshold  = clusterDistance,
           currPotential  = Pot,
           runInParallel  = runClusteringInParallel,
+          maxCores       = maxClusterCores,
           totPotential   = length(pots),
-          userTags       = studyAreaHash)
+          userTags       = studyAreaHash,
+          omitArgs       = "maxCores")
   }))
   
   # Drop degenerate clusters (e.g., single-line clusters) that can destabilize downstream refinement

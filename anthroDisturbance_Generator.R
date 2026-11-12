@@ -29,7 +29,7 @@ defineModule(sim, list(
                   "data.table", "reproducible", "geodata",
                   "terra", "crayon", "msm", "sf",
                   "tictoc", "roads", "truncnorm",
-                  "foreach", "doParallel", "digest", "ggplot2"),
+                  "foreach", "doParallel", "parallelly", "digest", "ggplot2"),
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -195,6 +195,11 @@ defineModule(sim, list(
     defineParameter("runClusteringInParallel", "logical", FALSE, NA, NA,
                     paste0("If TRUE, runs clusters' analysis in parallel (within the most internal ",
                            "for loop). This may be slower depending on amount of data")),
+    defineParameter("maxClusterCores", "numeric", NA, NA, NA,
+                    paste0("Maximum number of cores for the parallel clustering of lines (only used ",
+                           "if runClusteringInParallel is TRUE). NA uses the cores available to R, ",
+                           "minus one. Set it when several simulations run at the same time on one ",
+                           "machine, so their clusters do not add up to more cores than it has.")),
     defineParameter("refinedStructure", "logical", FALSE, NA, NA,
                     paste0("If TRUE, it tries to copy the structure of the line clusters ",
                            "for seismic lines (if useClusterMethod = TRUE). While this slows down ",
@@ -721,6 +726,7 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
                                                        distanceNewLinesFactor = P(sim)$distanceNewLinesFactor,
                                                        useClusterMethod = P(sim)$useClusterMethod,
                                                        runClusteringInParallel = P(sim)$runClusteringInParallel,
+                                                       maxClusterCores = P(sim)$maxClusterCores,
                                                        refinedStructure = P(sim)$refinedStructure)
         }
         sim$currentDisturbanceLayer[[paste0("Year", time(sim))]] <- mod$updatedLayers$currentDisturbanceLayer

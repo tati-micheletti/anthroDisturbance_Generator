@@ -11,7 +11,7 @@
 clusterLines <- function(Lines, distThreshold = 5000, 
                          currPotential, totPotential,
                          plotClusterDiagnostic = FALSE,
-                         runInParallel){
+                         runInParallel, maxCores = NA){
   # If fewer than 2 lines, skip clustering and assign default cluster
   if (nrow(Lines) < 2) {
     if (nrow(Lines) == 0) return(Lines)
@@ -43,8 +43,7 @@ clusterLines <- function(Lines, distThreshold = 5000,
   totalLineClusters <- length(unique(Lines$cluster))
   
   if (runInParallel) {
-    n_cores <- parallel::detectCores()
-    cluster <- parallel::makeCluster(max(1, min(n_cores - 1, totalLineClusters)), type = "PSOCK")
+    cluster <- parallelly::makeClusterPSOCK(clusterWorkers(totalLineClusters, maxCores))
     doParallel::registerDoParallel(cluster)
     on.exit(parallel::stopCluster(cluster), add = TRUE)
     
@@ -100,4 +99,16 @@ clusterLines <- function(Lines, distThreshold = 5000,
     }
   }
   return(Lines)
+}
+
+# Number of PSOCK workers for clusterLines(): at most one per line cluster, at most maxCores
+# (if not NA), and at most the cores this R session may use, minus one for the main process.
+# parallelly::availableCores() respects the limits set by the system or a job scheduler (CPU
+# affinity, cgroups, Slurm, PBS, mc.cores), which parallel::detectCores() ignores, and
+# constraints = "connections" keeps the count below the number of connections R can open
+# (about 125 by default): a larger PSOCK cluster cannot be created.
+clusterWorkers <- function(nClusters, maxCores = NA) {
+  nCores <- parallelly::availableCores(constraints = "connections", omit = 1)
+  if (!is.na(maxCores)) nCores <- min(nCores, as.integer(maxCores))
+  as.integer(max(1L, min(nCores, nClusters)))
 }

@@ -84,7 +84,7 @@ jobs:
             "covr", "testthat", "withr", "terra", "data.table",
             "sf", "reproducible", "raster", "tictoc", "mockery",
             "digest", "crayon", "msm", "doParallel", "doSNOW",
-            "foreach", "dplyr", "sp", "stringi", "zip", "Require",
+            "foreach", "parallelly", "dplyr", "sp", "stringi", "zip", "Require",
             "truncnorm", "xml2", "DT", "htmltools",
             "htmlwidgets", "BH", "RApiSerialize", "Rcpp",
             "RcppParallel", "stringfish", "SpaDES.core"

@@ -25,7 +25,8 @@ generateDisturbancesShp <- function(disturbanceParameters,
                                     distanceNewLinesFactor,
                                     runClusteringInParallel,
                                     useClusterMethod,
-                                    refinedStructure){
+                                    refinedStructure,
+                                    maxClusterCores = NA){
 
   if (maskWaterAndMountainsFromLines)(Require("spaths"))
   if (useRoadsPackage)(Require("geodata"))
@@ -939,8 +940,10 @@ generateDisturbancesShp <- function(disturbanceParameters,
                 Lay                    = Lay,
                 potLayTopValid         = potLayTopValid,
                 runClusteringInParallel= runClusteringInParallel,
+                maxClusterCores        = maxClusterCores,
                 clusterDistance        = clusterDistance,
-                studyAreaHash          = studyAreaHash
+                studyAreaHash          = studyAreaHash,
+                omitArgs               = "maxClusterCores"
               )
               cropLayFinal   <- out_createCropLay$lines
               potLayTopValid <- out_createCropLay$availableArea

@@ -116,3 +116,64 @@ test_that("plotClusterDiagnostic runs cleanly", {
                  runInParallel=FALSE), NA
   )
 })
+
+# 10. Number of parallel workers
+# Four lines far apart: four clusters
+four_lines <- do.call(rbind, lapply(c(0, 10000, 20000, 30000), function(x) {
+  vect(matrix(c(x, 1, x, 0), ncol = 2, byrow = TRUE), type = "lines")
+}))
+four_lines$Potential <- 1
+four_lines$individualID <- paste0("l", 1:4)
+crs(four_lines) <- "EPSG:3857"
+
+# Stand-in for parallelly::makeClusterPSOCK(): records how many workers were asked for,
+# but starts only one
+worker_recorder <- function(rec) {
+  makeClusterPSOCK <- parallelly::makeClusterPSOCK
+  function(workers, ...) {
+    rec$n <- workers
+    makeClusterPSOCK(1L)
+  }
+}
+
+test_that("Parallel clustering uses no more workers than the cores R may use", {
+  skip_if_not_installed("doParallel")
+  skip_if_not_installed("parallelly")
+  withr::local_options(mc.cores = 1) # R may use 2 cores: one for itself, one for a worker
+  withr::defer(foreach::registerDoSEQ())
+  rec <- new.env()
+  mockery::stub(clusterLines, "parallelly::makeClusterPSOCK", worker_recorder(rec))
+  res <- clusterLines(four_lines, distThreshold = 1,
+                      currPotential = 1, totPotential = 1,
+                      runInParallel = TRUE)
+  expect_identical(rec$n, 1L)
+  expect_equal(length(unique(res$cluster)), 4)
+})
+
+test_that("maxCores caps the parallel workers and the result matches sequential", {
+  skip_if_not_installed("doParallel")
+  skip_if_not_installed("parallelly")
+  withr::defer(foreach::registerDoSEQ())
+  res_seq <- clusterLines(four_lines, distThreshold = 1,
+                          currPotential = 1, totPotential = 1,
+                          runInParallel = FALSE)
+  rec <- new.env()
+  mockery::stub(clusterLines, "parallelly::makeClusterPSOCK", worker_recorder(rec))
+  res_par <- clusterLines(four_lines, distThreshold = 1,
+                          currPotential = 1, totPotential = 1,
+                          runInParallel = TRUE, maxCores = 1)
+  expect_identical(rec$n, 1L)
+  expect_equal(res_par$cluster, res_seq$cluster)
+  expect_equal(res_par$Pot_Clus, res_seq$Pot_Clus)
+  expect_equal(res_par$calculatedLength, res_seq$calculatedLength)
+})
+
+test_that("clusterWorkers() never exceeds the line clusters, maxCores or the cores available", {
+  skip_if_not_installed("parallelly")
+  # availableCores(omit = 1) reports 3 cores for workers
+  mockery::stub(clusterWorkers, "parallelly::availableCores", 3L)
+  expect_identical(clusterWorkers(nClusters = 100, maxCores = NA), 3L)
+  expect_identical(clusterWorkers(nClusters = 100, maxCores = 2), 2L)
+  expect_identical(clusterWorkers(nClusters = 2, maxCores = NA), 2L)
+  expect_identical(clusterWorkers(nClusters = 0, maxCores = NA), 1L)
+})
