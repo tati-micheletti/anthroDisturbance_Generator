@@ -38,7 +38,7 @@ stub_prepInputs_for <- function(layers) {
 }
 
 # Keep module cross-calls quiet and predictable in tests
-stub(disturbanceInfoFromECCC, 'extractNonPotentialLayers',
+stub(disturbanceInfoFromECCC, 'anthroDisturbanceUtils::extractNonPotentialLayers',
      function(dl) data.table(Sector = character(), dataClass = character()))
 stub(disturbanceInfoFromECCC, 'geomtype', function(x) 'line')  # avoids dispatch surprises
 
@@ -400,7 +400,7 @@ test_that("classes reported by extractNonPotentialLayers are surfaced (function 
   
   # Track that extractNonPotentialLayers is used
   was_called <- FALSE
-  mockery::stub(disturbanceInfoFromECCC, 'extractNonPotentialLayers',
+  mockery::stub(disturbanceInfoFromECCC, 'anthroDisturbanceUtils::extractNonPotentialLayers',
                 function(dl) { was_called <<- TRUE; data.table(Sector='test', dataClass='extra') })
   
   res <- suppressWarnings(
@@ -434,7 +434,7 @@ test_that("RTM is optional (NULL) and function still returns a result", {
     tf <- tolower(basename(targetFile))
     if (grepl('lines|linear', tf)) return(fake_line) else return(fake_poly)
   })
-  stub(disturbanceInfoFromECCC, 'extractNonPotentialLayers',
+  stub(disturbanceInfoFromECCC, 'anthroDisturbanceUtils::extractNonPotentialLayers',
        function(dl) data.table(Sector = character(), dataClass = character()))
   stub(disturbanceInfoFromECCC, 'geomtype', function(x) 'line')
   

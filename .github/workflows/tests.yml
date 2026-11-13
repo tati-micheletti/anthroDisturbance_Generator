@@ -115,6 +115,10 @@ jobs:
             remotes::install_github(paste0("PredictiveEcology/", p), ref = pins[[p]],
                                     dependencies = FALSE, upgrade = "never", force = TRUE)
           }
+          # helpers shared by the anthropogenic disturbance modules, at a fixed commit
+          remotes::install_github("FOR-CAST/anthroDisturbanceUtils",
+                                  ref = "7c846be45c7cd5cea48b233cd8c21fa45a3610a3",
+                                  upgrade = "never", force = TRUE)
           RS
 
       - name: Ensure Require present

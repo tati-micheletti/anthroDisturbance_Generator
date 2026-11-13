@@ -210,7 +210,7 @@ disturbanceInfoFromECCC <- function(studyArea,
   # These might have been missed by ECCC's product due to resolution, for example
   # We assume they are newer rather than older.
   allClassesAvailable <- unique(AD_NEW_all$Class)
-  nonPotLay <- extractNonPotentialLayers(disturbanceList)
+  nonPotLay <- anthroDisturbanceUtils::extractNonPotentialLayers(disturbanceList)
   laysToADD <- lapply(seq_len(nrow(nonPotLay)), function(INDEX) {
     sector <- nonPotLay[INDEX, Sector]
     dataClass <- nonPotLay[INDEX, dataClass]

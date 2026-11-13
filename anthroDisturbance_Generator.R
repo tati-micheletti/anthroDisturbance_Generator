@@ -29,7 +29,8 @@ defineModule(sim, list(
                   "data.table", "reproducible", "geodata",
                   "terra", "crayon", "msm", "sf",
                   "tictoc", "roads", "truncnorm",
-                  "foreach", "doParallel", "digest", "ggplot2"),
+                  "foreach", "doParallel", "digest", "ggplot2",
+                  "FOR-CAST/anthroDisturbanceUtils"),
   parameters = rbind(
     defineParameter(".plots", "character", "screen", NA, NA,
                     "Used by Plots function, which can be optionally used here"),
@@ -248,7 +249,7 @@ defineModule(sim, list(
                                "values being the ones that need to be filled ",
                                "with new developments first, or prepared potential layers",
                                " (i.e., potentialCutblocks)."),
-                 sourceURL = "https://drive.google.com/file/d/1v7MpENdhspkWxHPZMlmx9UPCGFYGbbYm/view?usp=sharing"),
+                 sourceURL = "https://zenodo.org/records/20628704/files/disturbanceList.zip"),
     
     expectsInput(objectName = "disturbanceParameters", objectClass = "data.table",
                  desc = paste0("Table with the following columns: ",
@@ -819,8 +820,8 @@ doEvent.anthroDisturbance_Generator = function(sim, eventTime, eventType) {
   }
   
   if (!suppliedElsewhere(object = "disturbanceList", sim = sim)) {
-    sim$disturbanceList <- unwrapTerraList(terraList = extractURL("disturbanceList"), 
-                                           generalPath = dataPath(sim))
+    sim$disturbanceList <- anthroDisturbanceUtils::unwrapTerraList(terraList = extractURL("disturbanceList"), 
+                                                                   generalPath = dataPath(sim))
     
     target_crs <- tryCatch(terra::crs(sim$rasterToMatch), error = function(...) NA_character_)
     if (!is.na(target_crs) && nzchar(target_crs)) {
