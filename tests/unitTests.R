@@ -37,7 +37,6 @@ testthat::test_file("tests/testthat/test-generateDisturbances.R")
 # test-generateDisturbancesShp.R - still needs work, later
 testthat::test_file("tests/testthat/test-generateDisturbancesShp.R")
 
-# test-generateMaps.R 
 
 # test-anthroDisturbance_Generator.R
 testthat::test_file("tests/testthat/test-anthroDisturbance_Generator.R")
