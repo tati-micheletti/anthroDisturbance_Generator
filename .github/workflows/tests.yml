@@ -87,7 +87,7 @@ jobs:
             "foreach", "dplyr", "sp", "stringi", "zip", "Require",
             "truncnorm", "xml2", "DT", "htmltools",
             "htmlwidgets", "BH", "RApiSerialize", "Rcpp",
-            "RcppParallel", "stringfish", "SpaDES.core"
+            "RcppParallel", "stringfish", "SpaDES.core", "SpaDES.tools"
           )
           missing <- cran_packages[!vapply(cran_packages, requireNamespace, logical(1), quietly = TRUE)]
           if (length(missing)) install.packages(missing)
